@@ -3,7 +3,7 @@
 ![license](https://img.shields.io/github/license/nautechsystems/nautilus_agents?color=blue)
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/NautilusTrader)
 
-Agent engine for [NautilusTrader](https://nautilustrader.io).
+Agentic infrastructure for [NautilusTrader](https://nautilustrader.io).
 
 This crate provides foundational types and traits for building autonomous
 agents on top of the Nautilus trading engine.
