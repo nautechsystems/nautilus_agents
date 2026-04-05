@@ -1,0 +1,97 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+
+//! Agent intent: the semantic action vocabulary with execution constraints.
+//!
+//! Each intent variant represents something the agent wants to do, not a
+//! raw engine command. Lowering translates intents into
+//! [`RuntimeAction`](crate::action::RuntimeAction) variants, filling
+//! execution details (order type, time in force, algorithm) within the
+//! bounds the constraint block provides.
+
+use nautilus_model::{
+    enums::OrderSide,
+    identifiers::{ClientOrderId, InstrumentId, StrategyId},
+    types::{Price, Quantity},
+};
+use serde::{Deserialize, Serialize};
+
+/// Lowering must respect these bounds when producing a trading command.
+/// All fields are optional: the agent specifies only what it cares about.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionConstraints {
+    pub target_price: Option<Price>,
+    pub limit_price: Option<Price>,
+    pub max_slippage_pct: Option<f64>,
+    pub reduce_only: bool,
+    pub expiry_ns: Option<u64>,
+    pub max_quantity: Option<Quantity>,
+}
+
+/// Does NOT carry trader_id, strategy_id, order_type, time_in_force,
+/// exec_algorithm_id, or position_id: lowering fills those.
+/// Research variants are stubs for v0.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AgentIntent {
+    ReducePosition {
+        instrument_id: InstrumentId,
+        quantity: Quantity,
+        constraints: ExecutionConstraints,
+    },
+    ClosePosition {
+        instrument_id: InstrumentId,
+        constraints: ExecutionConstraints,
+    },
+    CancelOrder {
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+    },
+    CancelAllOrders {
+        instrument_id: InstrumentId,
+        order_side: OrderSide,
+    },
+    PauseStrategy {
+        strategy_id: StrategyId,
+    },
+    ResumeStrategy {
+        strategy_id: StrategyId,
+    },
+    AdjustRiskLimits {
+        params: serde_json::Value,
+    },
+    EscalateToHuman {
+        reason: String,
+        severity: EscalationSeverity,
+    },
+
+    // Research mode stubs (no fields yet).
+    // RequestMoreData is not here: that is NeedMoreData in PolicyDecision.
+    RunBacktest,
+    AbortBacktest,
+    AdjustParameters,
+    CompareResults,
+    SaveCandidate,
+    RejectHypothesis,
+}
+
+/// Escalation severity for [`AgentIntent::EscalateToHuman`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EscalationSeverity {
+    Info,
+    Warning,
+    Critical,
+}
