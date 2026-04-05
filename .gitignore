@@ -1,0 +1,73 @@
+# Build
+target/
+**/*.rs.bk
+
+# Logs
+*.log
+log/
+logs/
+
+# Profiler and database
+*.prof
+*.sqlite
+
+# Secrets and environment
+*.key
+*.key_secret
+*.env
+*.env.*
+
+# Compressed files
+*.tar.gz*
+*.zip
+
+# Data
+*.parquet
+
+# Editor
+*.swp
+*.swo
+*~
+*.iml
+.idea/
+.vscode/
+
+# Property testing regressions
+**/proptest-regressions/
+
+# Benchmarking and coverage
+.benchmarks*
+.coverage*
+htmlcov/
+
+# Build environment and temp
+_build/
+build/
+dist/
+*.bak
+*tmp/
+*temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI assistants and tools
+.cursorignore
+.mcp.json
+.mcp.local.json
+mcp/*.json
+.claude/
+claude.config.json
+.codex/
+.cursor/
+.aider*
+.continue/
+
+AGENTS.md
+CLAUDE.md
+CODEX.md
+GEMINI.md
+
+# Node
+node_modules/

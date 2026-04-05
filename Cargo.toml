@@ -1,0 +1,22 @@
+[package]
+name = "nautilus-agents"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+authors = ["Nautech Systems <info@nautechsystems.io>"]
+license = "LGPL-3.0-or-later"
+description = "Agentic infrastructure for the Nautilus trading engine"
+documentation = "https://docs.nautilustrader.io"
+repository = "https://github.com/nautechsystems/nautilus_agents"
+homepage = "https://nautilustrader.io"
+categories = ["finance", "simulation", "asynchronous"]
+keywords = ["finance", "trading", "agents", "ai", "algorithmic-trading"]
+readme = "README.md"
+
+[workspace]
+
+[lib]
+name = "nautilus_agents"
+
+[lints.rust]
+nonstandard_style = { level = "deny" }
