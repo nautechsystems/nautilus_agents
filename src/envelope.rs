@@ -43,13 +43,15 @@ pub enum DecisionTrigger {
 }
 
 /// Recorded at both intent-level and post-lowering stages.
+///
+/// Guardrails are pure checks: they approve or reject, never rewrite.
+/// If intent rewriting is needed, add a separate pipeline stage.
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "result")]
 pub enum GuardrailResult {
     Approved,
     Rejected { reason: String },
-    Modified { description: String },
 }
 
 /// Distinct from the lowered action because venue behavior diverges.

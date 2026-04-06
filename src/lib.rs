@@ -24,8 +24,12 @@ pub mod action;
 pub mod capability;
 pub mod context;
 pub mod envelope;
+pub mod guardrail;
 pub mod intent;
+pub mod lowering;
+pub mod pipeline;
 pub mod policy;
+pub mod recording;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -48,8 +52,12 @@ pub mod prelude {
             DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
             ReconciliationOutcome,
         },
+        guardrail::{ActionGuardrail, IntentGuardrail},
         intent::{AgentIntent, EscalationSeverity, ExecutionConstraints},
+        lowering::{LoweringContext, LoweringError, lower_intent},
+        pipeline::{DecisionPipeline, PipelineError},
         policy::{AgentPolicy, PolicyDecision, PolicyError},
+        recording::{DecisionRecorder, RecordingError},
     };
 }
 
@@ -60,21 +68,27 @@ mod tests {
     use nautilus_core::{UUID4, UnixNanos};
     use nautilus_model::{
         data::QuoteTick,
-        enums::OrderSide,
-        identifiers::InstrumentId,
-        types::{Price, Quantity},
+        enums::{CurrencyType, OrderSide, PositionSide},
+        events::PositionSnapshot,
+        identifiers::{AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, TraderId},
+        types::{Currency, Price, Quantity},
     };
     use rstest::rstest;
 
     use crate::{
+        action::{RuntimeAction, TradeAction},
         capability::{ActionCapability, CapabilitySet, ObservationCapability},
         context::AgentContext,
         envelope::{
             DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
             ReconciliationOutcome,
         },
+        guardrail::{ActionGuardrail, IntentGuardrail},
         intent::{AgentIntent, ExecutionConstraints},
-        policy::PolicyDecision,
+        lowering::{LoweringContext, lower_intent},
+        pipeline::DecisionPipeline,
+        policy::{AgentPolicy, PolicyDecision, PolicyError},
+        recording::DecisionRecorder,
     };
 
     fn test_instrument_id() -> InstrumentId {
@@ -315,5 +329,454 @@ mod tests {
         let json = serde_json::to_string(&intent).unwrap();
         let restored: AgentIntent = serde_json::from_str(&json).unwrap();
         assert!(matches!(restored, AgentIntent::RunBacktest));
+    }
+
+    fn test_currency() -> Currency {
+        Currency::new("USDT", 8, 0, "Tether", CurrencyType::Crypto)
+    }
+
+    fn test_position_snapshot() -> PositionSnapshot {
+        PositionSnapshot {
+            trader_id: TraderId::new("TESTER-001"),
+            strategy_id: StrategyId::new("EMACross-001"),
+            instrument_id: test_instrument_id(),
+            position_id: PositionId::new("P-001"),
+            account_id: AccountId::new("SIM-001"),
+            opening_order_id: ClientOrderId::new("O-001"),
+            closing_order_id: None,
+            entry: OrderSide::Buy,
+            side: PositionSide::Long,
+            signed_qty: 1.5,
+            quantity: Quantity::from("1.5"),
+            peak_qty: Quantity::from("1.5"),
+            quote_currency: test_currency(),
+            base_currency: None,
+            settlement_currency: test_currency(),
+            avg_px_open: 68450.0,
+            avg_px_close: None,
+            realized_return: None,
+            realized_pnl: None,
+            unrealized_pnl: None,
+            commissions: vec![],
+            duration_ns: None,
+            ts_opened: UnixNanos::from(1_712_399_000_000_000_000u64),
+            ts_closed: None,
+            ts_init: UnixNanos::from(1_712_399_000_000_000_000u64),
+            ts_last: UnixNanos::from(1_712_399_999_000_000_000u64),
+        }
+    }
+
+    fn test_context_with_position() -> AgentContext {
+        let mut ctx = test_context();
+        ctx.capabilities
+            .actions
+            .insert(ActionCapability::ManageOrders);
+        ctx.positions = vec![test_position_snapshot()];
+        ctx
+    }
+
+    fn test_lowering_ctx() -> LoweringContext {
+        LoweringContext {
+            trader_id: TraderId::new("TESTER-001"),
+            strategy_id: StrategyId::new("EMACross-001"),
+        }
+    }
+
+    struct FixedPolicy(PolicyDecision);
+
+    impl AgentPolicy for FixedPolicy {
+        fn evaluate(&self, _context: AgentContext) -> Result<PolicyDecision, PolicyError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    struct ApproveAllIntents;
+
+    impl IntentGuardrail for ApproveAllIntents {
+        fn evaluate(&self, _intent: &AgentIntent, _context: &AgentContext) -> GuardrailResult {
+            GuardrailResult::Approved
+        }
+    }
+
+    struct RejectAllIntents(String);
+
+    impl IntentGuardrail for RejectAllIntents {
+        fn evaluate(&self, _intent: &AgentIntent, _context: &AgentContext) -> GuardrailResult {
+            GuardrailResult::Rejected {
+                reason: self.0.clone(),
+            }
+        }
+    }
+
+    struct ApproveAllActions;
+
+    impl ActionGuardrail for ApproveAllActions {
+        fn evaluate(&self, _action: &RuntimeAction, _context: &AgentContext) -> GuardrailResult {
+            GuardrailResult::Approved
+        }
+    }
+
+    #[rstest]
+    fn test_intent_guardrail_approve() {
+        let guardrail = ApproveAllIntents;
+        let result = guardrail.evaluate(&test_intent(), &test_context());
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_intent_guardrail_reject() {
+        let guardrail = RejectAllIntents("position limit exceeded".to_string());
+        let result = guardrail.evaluate(&test_intent(), &test_context());
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert_eq!(reason, "position limit exceeded");
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_cancel_order() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-123"),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelOrder(cmd) => {
+                    assert_eq!(cmd.instrument_id, test_instrument_id());
+                    assert_eq!(cmd.client_order_id, ClientOrderId::new("O-123"));
+                    assert_eq!(cmd.trader_id, TraderId::new("TESTER-001"));
+                }
+                other => panic!("expected CancelOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_cancel_all_orders() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::CancelAllOrders {
+            instrument_id: test_instrument_id(),
+            order_side: OrderSide::Buy,
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelAllOrders(cmd) => {
+                    assert_eq!(cmd.instrument_id, test_instrument_id());
+                    assert_eq!(cmd.order_side, OrderSide::Buy);
+                }
+                other => panic!("expected CancelAllOrders, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_reduce_position_long_produces_sell() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+
+        let action = lower_intent(&test_intent(), &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("0.5"));
+                    assert!(submit.order_init.reduce_only);
+                    assert_eq!(submit.position_id, Some(PositionId::new("P-001")));
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_close_position_uses_full_quantity() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("1.5"));
+                    assert!(submit.order_init.reduce_only);
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_research_returns_error() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::RunBacktest;
+
+        let result = lower_intent(&intent, &ctx, &lowering, ctx.ts_context);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_lower_no_position_returns_error() {
+        let ctx = test_context(); // no positions
+        let lowering = test_lowering_ctx();
+
+        let result = lower_intent(&test_intent(), &ctx, &lowering, ctx.ts_context);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_lower_selects_position_by_strategy() {
+        let mut ctx = test_context_with_position();
+        // Add a second position for the same instrument under a different strategy.
+        let mut other_position = test_position_snapshot();
+        other_position.strategy_id = StrategyId::new("Other-001");
+        other_position.position_id = PositionId::new("P-OTHER");
+        other_position.side = PositionSide::Short;
+        other_position.quantity = Quantity::from("3.0");
+        other_position.signed_qty = -3.0;
+        ctx.positions.push(other_position);
+
+        let lowering = test_lowering_ctx(); // strategy_id = EMACross-001
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    // Should close the EMACross-001 Long position (qty 1.5),
+                    // not the Other-001 Short position (qty 3.0).
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("1.5"));
+                    assert_eq!(submit.position_id, Some(PositionId::new("P-001")));
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_pipeline_no_action() {
+        let policy = FixedPolicy(PolicyDecision::NoAction);
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+
+        let envelope = pipeline.run(trigger, test_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::NoAction));
+        assert!(envelope.intent_guardrail.is_none());
+        assert!(envelope.lowered_action.is_none());
+        assert!(envelope.action_guardrail.is_none());
+    }
+
+    #[rstest]
+    fn test_pipeline_act_approved() {
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-123"),
+        }));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let mut ctx = test_context_with_position();
+        ctx.capabilities
+            .actions
+            .insert(ActionCapability::ManageOrders);
+
+        let envelope = pipeline.run(trigger, ctx).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        assert!(matches!(
+            envelope.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(envelope.lowered_action.is_some());
+        assert!(matches!(
+            envelope.action_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+    }
+
+    #[rstest]
+    fn test_pipeline_intent_guardrail_rejected() {
+        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(RejectAllIntents(
+                "exceeds position limit".to_string(),
+            )));
+
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 30_000_000_000,
+        };
+
+        let envelope = pipeline.run(trigger, test_context_with_position()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        match &envelope.intent_guardrail {
+            Some(GuardrailResult::Rejected { reason }) => {
+                assert_eq!(reason, "exceeds position limit");
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+        assert!(envelope.lowered_action.is_none());
+        assert!(envelope.action_guardrail.is_none());
+    }
+
+    #[rstest]
+    fn test_pipeline_capability_denied_records_rejection() {
+        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+
+        let ctx = AgentContext {
+            capabilities: CapabilitySet {
+                observations: BTreeSet::new(),
+                actions: BTreeSet::new(),
+                instrument_scope: BTreeSet::new(),
+            },
+            ..test_context()
+        };
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+
+        let envelope = pipeline.run(trigger, ctx).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        assert!(matches!(
+            envelope.intent_guardrail,
+            Some(GuardrailResult::Rejected { .. })
+        ));
+        assert!(envelope.lowered_action.is_none());
+    }
+
+    #[rstest]
+    fn test_pipeline_lowering_failure_records_rejection() {
+        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents));
+
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        // Context has ManagePositions capability but no positions,
+        // so lowering will fail with NoPosition.
+        let envelope = pipeline.run(trigger, test_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        assert!(matches!(
+            envelope.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(envelope.lowered_action.is_none());
+        match &envelope.action_guardrail {
+            Some(GuardrailResult::Rejected { reason }) => {
+                assert!(reason.contains("no position found"));
+            }
+            other => panic!("expected lowering failure as Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_pipeline_round_trip_serialization() {
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-456"),
+        }));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let mut ctx = test_context_with_position();
+        ctx.capabilities
+            .actions
+            .insert(ActionCapability::ManageOrders);
+
+        let envelope = pipeline.run(trigger, ctx).unwrap();
+        let json = serde_json::to_string(&envelope).unwrap();
+        let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.schema_version, ENVELOPE_SCHEMA_VERSION);
+        assert!(matches!(restored.decision, PolicyDecision::Act(_)));
+        assert!(restored.lowered_action.is_some());
+    }
+
+    #[rstest]
+    fn test_decision_recorder_writes_json_lines() {
+        let dir = std::env::temp_dir().join(format!("nautilus_test_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let recorder = DecisionRecorder::new(&path);
+
+        let envelope1 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            intent_guardrail: None,
+            lowered_action: None,
+            action_guardrail: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let envelope2 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Manual {
+                reason: "test".to_string(),
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            intent_guardrail: None,
+            lowered_action: None,
+            action_guardrail: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_001_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        recorder.record(&envelope1).unwrap();
+        recorder.record(&envelope2).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let restored1: DecisionEnvelope = serde_json::from_str(lines[0]).unwrap();
+        let restored2: DecisionEnvelope = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(restored1.envelope_id, envelope1.envelope_id);
+        assert_eq!(restored2.envelope_id, envelope2.envelope_id);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

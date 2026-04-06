@@ -28,8 +28,13 @@ use nautilus_model::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Lowering must respect these bounds when producing a trading command.
-/// All fields are optional: the agent specifies only what it cares about.
+/// Bounds for lowering when producing a trading command. All fields are
+/// optional: the agent specifies only what it cares about.
+///
+/// v0 enforces `reduce_only` for position-reducing intents. The remaining
+/// fields (`target_price`, `limit_price`, `max_slippage_pct`, `expiry_ns`,
+/// `max_quantity`) are accepted but not yet applied by the lowering
+/// function. They are reserved for future order-type selection logic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionConstraints {
     pub target_price: Option<Price>,
@@ -79,7 +84,6 @@ pub enum AgentIntent {
     },
 
     // Research mode stubs (no fields yet).
-    // RequestMoreData is not here: that is NeedMoreData in PolicyDecision.
     RunBacktest,
     AbortBacktest,
     AdjustParameters,
