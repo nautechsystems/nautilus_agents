@@ -30,6 +30,7 @@ use crate::action::RuntimeAction;
 use crate::context::AgentContext;
 use crate::policy::PolicyDecision;
 
+/// Stays at 1 until the envelope contract is finalized.
 pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
 #[non_exhaustive]
@@ -52,6 +53,18 @@ pub enum DecisionTrigger {
 pub enum GuardrailResult {
     Approved,
     Rejected { reason: String },
+}
+
+/// Outcome of the lowering step, distinct from guardrail evaluation.
+///
+/// Recorded in the envelope so replay and audit can distinguish a
+/// lowering failure from an action-guardrail rejection.
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "result")]
+pub enum LoweringOutcome {
+    Success,
+    Failed { reason: String },
 }
 
 /// Distinct from the lowered action because venue behavior diverges.
@@ -91,6 +104,7 @@ pub struct DecisionEnvelope {
     pub context: AgentContext,
     pub decision: PolicyDecision,
     pub intent_guardrail: Option<GuardrailResult>,
+    pub lowering_result: Option<LoweringOutcome>,
     pub lowered_action: Option<RuntimeAction>,
     pub action_guardrail: Option<GuardrailResult>,
     pub reconciliation: Option<ReconciliationOutcome>,

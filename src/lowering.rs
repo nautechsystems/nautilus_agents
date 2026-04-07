@@ -19,10 +19,10 @@
 //! does not carry (trader ID, strategy ID, order type, time in force),
 //! producing a concrete [`RuntimeAction`] the engine can execute.
 //!
-//! v0 handles operations mode only: [`ReducePosition`](crate::intent::AgentIntent::ReducePosition),
-//! [`ClosePosition`](crate::intent::AgentIntent::ClosePosition),
-//! [`CancelOrder`](crate::intent::AgentIntent::CancelOrder), and
-//! [`CancelAllOrders`](crate::intent::AgentIntent::CancelAllOrders).
+//! Operations intents lower to trading commands. Research intents lower
+//! to [`ResearchCommand`](crate::action::ResearchCommand) variants.
+//! Workflow intents (`SaveCandidate`, `RejectHypothesis`) and strategy
+//! management intents return [`LoweringError::NotLowerable`].
 
 use nautilus_common::messages::execution::{
     CancelAllOrders as CancelAllOrdersCmd, CancelOrder as CancelOrderCmd, SubmitOrder,
@@ -35,7 +35,7 @@ use nautilus_model::{
     types::Quantity,
 };
 
-use crate::action::{RuntimeAction, TradeAction};
+use crate::action::{ResearchCommand, RuntimeAction, TradeAction};
 use crate::context::AgentContext;
 use crate::intent::AgentIntent;
 
@@ -53,16 +53,17 @@ pub enum LoweringError {
     NoPosition { instrument_id: InstrumentId },
     #[error("position is flat for {instrument_id}")]
     FlatPosition { instrument_id: InstrumentId },
-    #[error("research mode not implemented")]
-    ResearchNotImplemented,
-    #[error("intent not lowerable in v0: {description}")]
+    #[error("intent not lowerable: {description}")]
     NotLowerable { description: String },
 }
 
 /// Translate an [`AgentIntent`] into a [`RuntimeAction`].
 ///
-/// Operations mode intents lower to trading commands. Research mode
-/// and strategy management intents return errors in v0.
+/// Operations intents lower to trading commands. Research intents
+/// lower to `ResearchCommand` variants. `AdjustParameters` lowers
+/// to `RunBacktest` configuration. Workflow intents (`SaveCandidate`,
+/// `RejectHypothesis`) and strategy management intents are not
+/// lowerable.
 pub fn lower_intent(
     intent: &AgentIntent,
     context: &AgentContext,
@@ -161,7 +162,21 @@ pub fn lower_intent(
             description: intent_variant_name(intent).to_string(),
         }),
 
-        _ => Err(LoweringError::ResearchNotImplemented),
+        AgentIntent::RunBacktest => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest)),
+
+        AgentIntent::AbortBacktest => Ok(RuntimeAction::Research(ResearchCommand::CancelBacktest)),
+
+        AgentIntent::AdjustParameters => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest)),
+
+        AgentIntent::CompareResults => {
+            Ok(RuntimeAction::Research(ResearchCommand::CompareBacktests))
+        }
+
+        AgentIntent::SaveCandidate | AgentIntent::RejectHypothesis => {
+            Err(LoweringError::NotLowerable {
+                description: intent_variant_name(intent).to_string(),
+            })
+        }
     }
 }
 
@@ -266,6 +281,11 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::ResumeStrategy { .. } => "ResumeStrategy",
         AgentIntent::AdjustRiskLimits { .. } => "AdjustRiskLimits",
         AgentIntent::EscalateToHuman { .. } => "EscalateToHuman",
-        _ => "Unknown",
+        AgentIntent::RunBacktest => "RunBacktest",
+        AgentIntent::AbortBacktest => "AbortBacktest",
+        AgentIntent::AdjustParameters => "AdjustParameters",
+        AgentIntent::CompareResults => "CompareResults",
+        AgentIntent::SaveCandidate => "SaveCandidate",
+        AgentIntent::RejectHypothesis => "RejectHypothesis",
     }
 }

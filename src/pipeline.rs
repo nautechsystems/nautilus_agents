@@ -29,7 +29,7 @@ use nautilus_core::UUID4;
 use crate::action::RuntimeAction;
 use crate::context::AgentContext;
 use crate::envelope::{
-    DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
+    DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome,
 };
 use crate::guardrail::{ActionGuardrail, IntentGuardrail};
 use crate::intent::AgentIntent;
@@ -87,6 +87,7 @@ impl DecisionPipeline {
         let decision = self.policy.evaluate(context.clone())?;
 
         let mut intent_guardrail = None;
+        let mut lowering_result = None;
         let mut lowered_action = None;
         let mut action_guardrail = None;
 
@@ -104,12 +105,13 @@ impl DecisionPipeline {
                         Ok(action) => {
                             let action_result = self.evaluate_action_guardrails(&action, &context);
                             intent_guardrail = Some(intent_result);
+                            lowering_result = Some(LoweringOutcome::Success);
                             lowered_action = Some(action);
                             action_guardrail = Some(action_result);
                         }
                         Err(lowering_err) => {
                             intent_guardrail = Some(intent_result);
-                            action_guardrail = Some(GuardrailResult::Rejected {
+                            lowering_result = Some(LoweringOutcome::Failed {
                                 reason: lowering_err.to_string(),
                             });
                         }
@@ -125,6 +127,7 @@ impl DecisionPipeline {
             context,
             decision,
             intent_guardrail,
+            lowering_result,
             lowered_action,
             action_guardrail,
             reconciliation: None,

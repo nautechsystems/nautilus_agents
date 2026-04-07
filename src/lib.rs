@@ -52,7 +52,7 @@ pub mod prelude {
         context::AgentContext,
         envelope::{
             DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
-            ReconciliationOutcome,
+            LoweringOutcome, ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
         guardrails::position_limit::PositionLimitGuardrail,
@@ -80,12 +80,12 @@ mod tests {
     use rstest::rstest;
 
     use crate::{
-        action::{RuntimeAction, TradeAction},
+        action::{ResearchCommand, RuntimeAction, TradeAction},
         capability::{ActionCapability, CapabilitySet, ObservationCapability},
         context::AgentContext,
         envelope::{
             DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
-            ReconciliationOutcome,
+            LoweringOutcome, ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
         guardrails::position_limit::PositionLimitGuardrail,
@@ -224,6 +224,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::Act(test_intent()),
             intent_guardrail: Some(GuardrailResult::Approved),
+            lowering_result: Some(LoweringOutcome::Success),
             lowered_action: None,
             action_guardrail: None,
             reconciliation: Some(ReconciliationOutcome::Filled {
@@ -260,6 +261,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::NoAction,
             intent_guardrail: None,
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -271,6 +273,7 @@ mod tests {
         let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
         assert!(matches!(restored.decision, PolicyDecision::NoAction));
         assert!(restored.intent_guardrail.is_none());
+        assert!(restored.lowering_result.is_none());
         assert!(restored.lowered_action.is_none());
         assert!(restored.reconciliation.is_none());
     }
@@ -530,13 +533,84 @@ mod tests {
     }
 
     #[rstest]
-    fn test_lower_research_returns_error() {
+    fn test_lower_run_backtest() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let intent = AgentIntent::RunBacktest;
+        let action =
+            lower_intent(&AgentIntent::RunBacktest, &ctx, &lowering, ctx.ts_context).unwrap();
+        assert!(matches!(
+            action,
+            RuntimeAction::Research(ResearchCommand::RunBacktest)
+        ));
+    }
 
-        let result = lower_intent(&intent, &ctx, &lowering, ctx.ts_context);
-        assert!(result.is_err());
+    #[rstest]
+    fn test_lower_abort_backtest() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let action =
+            lower_intent(&AgentIntent::AbortBacktest, &ctx, &lowering, ctx.ts_context).unwrap();
+        assert!(matches!(
+            action,
+            RuntimeAction::Research(ResearchCommand::CancelBacktest)
+        ));
+    }
+
+    #[rstest]
+    fn test_lower_adjust_parameters_produces_run_backtest() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let action = lower_intent(
+            &AgentIntent::AdjustParameters,
+            &ctx,
+            &lowering,
+            ctx.ts_context,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            RuntimeAction::Research(ResearchCommand::RunBacktest)
+        ));
+    }
+
+    #[rstest]
+    fn test_lower_compare_results() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let action = lower_intent(
+            &AgentIntent::CompareResults,
+            &ctx,
+            &lowering,
+            ctx.ts_context,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            RuntimeAction::Research(ResearchCommand::CompareBacktests)
+        ));
+    }
+
+    #[rstest]
+    fn test_lower_save_candidate_not_lowerable() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let err =
+            lower_intent(&AgentIntent::SaveCandidate, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("not lowerable"));
+    }
+
+    #[rstest]
+    fn test_lower_reject_hypothesis_not_lowerable() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let err = lower_intent(
+            &AgentIntent::RejectHypothesis,
+            &ctx,
+            &lowering,
+            ctx.ts_context,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not lowerable"));
     }
 
     #[rstest]
@@ -621,6 +695,10 @@ mod tests {
             envelope.intent_guardrail,
             Some(GuardrailResult::Approved)
         ));
+        assert!(matches!(
+            envelope.lowering_result,
+            Some(LoweringOutcome::Success)
+        ));
         assert!(envelope.lowered_action.is_some());
         assert!(matches!(
             envelope.action_guardrail,
@@ -679,7 +757,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_pipeline_lowering_failure_records_rejection() {
+    fn test_pipeline_lowering_failure_records_lowering_result() {
         let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(ApproveAllIntents));
@@ -695,13 +773,14 @@ mod tests {
             envelope.intent_guardrail,
             Some(GuardrailResult::Approved)
         ));
-        assert!(envelope.lowered_action.is_none());
-        match &envelope.action_guardrail {
-            Some(GuardrailResult::Rejected { reason }) => {
+        match &envelope.lowering_result {
+            Some(LoweringOutcome::Failed { reason }) => {
                 assert!(reason.contains("no position found"));
             }
-            other => panic!("expected lowering failure as Rejected, got {other:?}"),
+            other => panic!("expected LoweringOutcome::Failed, got {other:?}"),
         }
+        assert!(envelope.lowered_action.is_none());
+        assert!(envelope.action_guardrail.is_none());
     }
 
     #[rstest]
@@ -748,6 +827,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::NoAction,
             intent_guardrail: None,
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -764,6 +844,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::NoAction,
             intent_guardrail: None,
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -803,6 +884,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::NoAction,
             intent_guardrail: None,
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -819,6 +901,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::Act(test_intent()),
             intent_guardrail: Some(GuardrailResult::Approved),
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -954,6 +1037,7 @@ mod tests {
             context: test_context(),
             decision: PolicyDecision::NoAction,
             intent_guardrail: None,
+            lowering_result: None,
             lowered_action: None,
             action_guardrail: None,
             reconciliation: None,
@@ -1087,6 +1171,89 @@ mod tests {
         };
         let result = guardrail.evaluate(&intent, &ctx);
         assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_pipeline_research_denied_without_capability() {
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::RunBacktest));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        // test_context() has no Research capability.
+        let envelope = pipeline.run(trigger, test_context()).unwrap();
+        assert!(matches!(
+            envelope.intent_guardrail,
+            Some(GuardrailResult::Rejected { .. })
+        ));
+        assert!(envelope.lowered_action.is_none());
+    }
+
+    fn test_research_context() -> AgentContext {
+        let mut ctx = test_context();
+        ctx.capabilities.actions.insert(ActionCapability::Research);
+        ctx
+    }
+
+    #[rstest]
+    fn test_pipeline_research_intent_lowers_successfully() {
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::RunBacktest));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let envelope = pipeline.run(trigger, test_research_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        assert!(matches!(
+            envelope.lowering_result,
+            Some(LoweringOutcome::Success)
+        ));
+        match &envelope.lowered_action {
+            Some(RuntimeAction::Research(ResearchCommand::RunBacktest)) => {}
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_pipeline_workflow_intent_records_lowering_failure() {
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::SaveCandidate));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let envelope = pipeline.run(trigger, test_research_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        match &envelope.lowering_result {
+            Some(LoweringOutcome::Failed { reason }) => {
+                assert!(reason.contains("not lowerable"));
+            }
+            other => panic!("expected LoweringOutcome::Failed, got {other:?}"),
+        }
+        assert!(envelope.lowered_action.is_none());
+        assert!(envelope.action_guardrail.is_none());
+    }
+
+    #[rstest]
+    fn test_lowering_outcome_round_trip() {
+        let success = LoweringOutcome::Success;
+        let json = serde_json::to_string(&success).unwrap();
+        let restored: LoweringOutcome = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, LoweringOutcome::Success));
+
+        let failed = LoweringOutcome::Failed {
+            reason: "no position found".to_string(),
+        };
+        let json = serde_json::to_string(&failed).unwrap();
+        let restored: LoweringOutcome = serde_json::from_str(&json).unwrap();
+        match restored {
+            LoweringOutcome::Failed { reason } => {
+                assert_eq!(reason, "no position found");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 
     #[rstest]

@@ -23,7 +23,10 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use crate::envelope::{DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult};
+use crate::action::RuntimeAction;
+use crate::envelope::{
+    DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome,
+};
 use crate::intent::AgentIntent;
 use crate::pipeline::{DecisionPipeline, PipelineError};
 use crate::policy::PolicyDecision;
@@ -90,15 +93,21 @@ impl ReplayResult {
     /// Returns `true` when the replayed outcome differs from the original.
     ///
     /// Compares the policy decision (including intent content), intent
-    /// guardrail result, and action guardrail result. Lowered actions
-    /// are not compared because `lower_intent` generates fresh UUIDs
-    /// each run, making serialized comparison unreliable.
+    /// guardrail result, lowering outcome, lowered action variant, and
+    /// action guardrail result. Trade action payloads are not compared
+    /// because `lower_intent` generates fresh UUIDs each run; only the
+    /// variant discriminant (SubmitOrder vs CancelOrder, etc.) is checked.
     pub fn decision_changed(&self) -> bool {
         !decisions_match(&self.original.decision, &self.replayed.decision)
             || !guardrails_match(
                 &self.original.intent_guardrail,
                 &self.replayed.intent_guardrail,
             )
+            || !lowering_outcomes_match(
+                &self.original.lowering_result,
+                &self.replayed.lowering_result,
+            )
+            || !lowered_actions_match(&self.original.lowered_action, &self.replayed.lowered_action)
             || !guardrails_match(
                 &self.original.action_guardrail,
                 &self.replayed.action_guardrail,
@@ -125,6 +134,21 @@ impl ReplayResult {
             let from = guardrail_label(&self.original.intent_guardrail);
             let to = guardrail_label(&self.replayed.intent_guardrail);
             return format!("envelope {id}: intent guardrail changed from {from} to {to}");
+        }
+
+        if !lowering_outcomes_match(
+            &self.original.lowering_result,
+            &self.replayed.lowering_result,
+        ) {
+            let from = lowering_label(&self.original.lowering_result);
+            let to = lowering_label(&self.replayed.lowering_result);
+            return format!("envelope {id}: lowering changed from {from} to {to}");
+        }
+
+        if !lowered_actions_match(&self.original.lowered_action, &self.replayed.lowered_action) {
+            let from = action_label(&self.original.lowered_action);
+            let to = action_label(&self.replayed.lowered_action);
+            return format!("envelope {id}: lowered action changed from {from} to {to}");
         }
 
         if !guardrails_match(
@@ -177,6 +201,51 @@ impl ReplayRunner {
     }
 }
 
+/// Compares lowered actions by variant discriminant. UUID fields
+/// inside trade payloads differ between runs, so payload comparison
+/// is skipped. Variant-level comparison still catches changes like
+/// SubmitOrder to CancelOrder or RunBacktest to CompareBacktests.
+fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => {
+            std::mem::discriminant(a) == std::mem::discriminant(b)
+        }
+        (Some(RuntimeAction::Trade(a)), Some(RuntimeAction::Trade(b))) => {
+            std::mem::discriminant(a.as_ref()) == std::mem::discriminant(b.as_ref())
+        }
+        _ => false,
+    }
+}
+
+fn action_label(action: &Option<RuntimeAction>) -> &'static str {
+    match action {
+        None => "none",
+        Some(RuntimeAction::Trade(_)) => "Trade",
+        Some(RuntimeAction::Research(_)) => "Research",
+    }
+}
+
+fn lowering_outcomes_match(a: &Option<LoweringOutcome>, b: &Option<LoweringOutcome>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(LoweringOutcome::Success), Some(LoweringOutcome::Success)) => true,
+        (
+            Some(LoweringOutcome::Failed { reason: a }),
+            Some(LoweringOutcome::Failed { reason: b }),
+        ) => a == b,
+        _ => false,
+    }
+}
+
+fn lowering_label(result: &Option<LoweringOutcome>) -> &'static str {
+    match result {
+        None => "none",
+        Some(LoweringOutcome::Success) => "success",
+        Some(LoweringOutcome::Failed { .. }) => "failed",
+    }
+}
+
 fn guardrails_match(a: &Option<GuardrailResult>, b: &Option<GuardrailResult>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -214,7 +283,12 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::ResumeStrategy { .. } => "ResumeStrategy",
         AgentIntent::AdjustRiskLimits { .. } => "AdjustRiskLimits",
         AgentIntent::EscalateToHuman { .. } => "EscalateToHuman",
-        _ => "Research",
+        AgentIntent::RunBacktest => "RunBacktest",
+        AgentIntent::AbortBacktest => "AbortBacktest",
+        AgentIntent::AdjustParameters => "AdjustParameters",
+        AgentIntent::CompareResults => "CompareResults",
+        AgentIntent::SaveCandidate => "SaveCandidate",
+        AgentIntent::RejectHypothesis => "RejectHypothesis",
     }
 }
 

@@ -50,6 +50,7 @@ pub enum ActionCapability {
     ManageStrategies,
     AdjustRisk,
     Escalate,
+    Research,
 }
 
 /// Constructed by the runtime, immutable for the agent's lifetime.
@@ -101,8 +102,12 @@ impl CapabilitySet {
 
             AgentIntent::EscalateToHuman { .. } => (ActionCapability::Escalate, None),
 
-            // Research stubs: no capability gating in v0.
-            _ => return Ok(()),
+            AgentIntent::RunBacktest
+            | AgentIntent::AbortBacktest
+            | AgentIntent::AdjustParameters
+            | AgentIntent::CompareResults
+            | AgentIntent::SaveCandidate
+            | AgentIntent::RejectHypothesis => (ActionCapability::Research, None),
         };
 
         if !self.can_act(required_cap) {
