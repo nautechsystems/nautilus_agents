@@ -130,8 +130,8 @@ See the [`examples/`](examples/) directory:
 
 ## Module map
 
-| Module       | Purpose                                           |
-|--------------|---------------------------------------------------|
+| Module       | Purpose                                            |
+|--------------|----------------------------------------------------|
 | `context`    | Owned policy input built from Nautilus snapshots.  |
 | `policy`     | `AgentPolicy`, `PolicyDecision`, `PolicyError`.    |
 | `intent`     | Semantic action vocabulary and constraints.        |
