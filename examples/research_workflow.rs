@@ -15,6 +15,10 @@
 
 //! Research workflow: run a backtest iteration through the decision pipeline.
 //!
+//! ```bash
+//! cargo run --example research_workflow
+//! ```
+//!
 //! Demonstrates how a research-focused agent policy emits `RunBacktest`
 //! intents that lower to `ResearchCommand` variants, with every decision
 //! recorded in an envelope for replay.

@@ -15,6 +15,10 @@
 
 //! Risk monitoring: detect a position anomaly and reduce exposure.
 //!
+//! ```bash
+//! cargo run --example risk_monitoring
+//! ```
+//!
 //! Demonstrates a defensive risk agent that monitors position size and
 //! emits `ReducePosition` when exposure exceeds a threshold. The
 //! `PositionLimitGuardrail` enforces per-order quantity limits as a
