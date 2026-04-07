@@ -6,13 +6,13 @@
 Open agent protocol for [NautilusTrader](https://nautilustrader.io).
 
 This crate defines the contract between an agent policy and the Nautilus
-trading engine:
+trading engine. Agents observe state, express decisions through a
+structured protocol, and every cycle is recorded for replay and audit.
 
-- Scope what an agent observes with `AgentContext`.
-- Express decisions with `PolicyDecision`.
-- Represent semantic actions with `AgentIntent`.
-- Lower intents into `RuntimeAction`.
-- Record each cycle in a `DecisionEnvelope`.
+- Automate backtest iteration: hypotheses, parameter sweeps, result
+  comparison.
+- Monitor live systems: detect anomalies, reduce exposure, escalate.
+- Record every decision for reproducible analysis.
 
 > [!WARNING]
 > Early development. The API is not yet stable.
@@ -83,19 +83,33 @@ This crate does not ship:
 You bring your own runtime. A separate server layer can sit on top of this
 protocol for live venue access and product features.
 
-## Current v0 scope
+## Capability tiers
 
-The current implementation is a protocol scaffold with an end-to-end
-operations path.
+The protocol defines three capability tiers, ordered by where agents
+deliver the most value first.
+
+**Research.** Backtest iteration, hypothesis testing, parameter
+optimization, result comparison. No venue risk, no capital at stake.
+The reasoning an agent does well and static rules handle poorly.
+
+**Risk and reliability.** Anomaly detection, exposure reduction, order
+cancellation, strategy pause, human escalation. Live but defensive:
+the agent monitors and protects.
+
+**Execution.** Agent-driven entry, limit orders, venue-specific
+parameters. The full trading surface, unlocked after research and risk
+management are proven.
+
+## Current v0 scope
 
 - `DecisionPipeline` runs policy evaluation, capability checks, dual
   guardrails, lowering, and envelope creation.
-- Lowering supports these operations intents today:
+- Risk management intents are lowerable today:
   `ReducePosition`, `ClosePosition`, `CancelOrder`, `CancelAllOrders`.
-- `ExecutionConstraints` accepts a broader constraint block, but v0 only
-  enforces `reduce_only` for position-reducing intents.
-- Research-mode types are defined but not wired through lowering.
-- `DecisionRecorder` writes JSONL and does not provide tamper-evident storage.
+- Research-mode types are defined. Research lowering is next.
+- `DecisionRecorder` writes JSONL. Replay reads it back and compares
+  outcomes across policy or guardrail changes.
+- `PositionLimitGuardrail` enforces per-order quantity limits.
 
 ## Module map
 
@@ -106,11 +120,13 @@ operations path.
 | `intent`     | Semantic action vocabulary and constraints.        |
 | `capability` | Observation and action permissions.                |
 | `guardrail`  | Intent-level and action-level guardrail traits.    |
+| `guardrails` | Concrete guardrail implementations.                |
 | `lowering`   | Intent-to-action translation.                      |
 | `action`     | `RuntimeAction`, `TradeAction`, `ResearchCommand`. |
 | `pipeline`   | End-to-end decision orchestration.                 |
 | `envelope`   | Canonical decision record types.                   |
 | `recording`  | JSONL recording for decision envelopes.            |
+| `replay`     | Replay reader, runner, and outcome comparison.     |
 
 ## Relationship to NautilusTrader
 
