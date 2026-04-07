@@ -31,10 +31,13 @@ use serde::{Deserialize, Serialize};
 /// Bounds for lowering when producing a trading command. All fields are
 /// optional: the agent specifies only what it cares about.
 ///
-/// v0 enforces `reduce_only` for position-reducing intents. The remaining
-/// fields (`target_price`, `limit_price`, `max_slippage_pct`, `expiry_ns`,
-/// `max_quantity`) are accepted but not yet applied by the lowering
-/// function. They are reserved for future order-type selection logic.
+/// v0 enforces `reduce_only` for position-reducing intents and rejects
+/// `limit_price`, `target_price`, and `max_slippage_pct` because the
+/// default lowering only produces market IOC orders. Setting these
+/// fields returns `LoweringError::UnsupportedConstraint`.
+///
+/// `expiry_ns` and `max_quantity` are accepted but not yet applied.
+/// They are reserved for future order-type selection logic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionConstraints {
     pub target_price: Option<Price>,
@@ -47,7 +50,6 @@ pub struct ExecutionConstraints {
 
 /// Does NOT carry trader_id, strategy_id, order_type, time_in_force,
 /// exec_algorithm_id, or position_id: lowering fills those.
-/// Research variants are stubs for v0.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -83,7 +85,9 @@ pub enum AgentIntent {
         severity: EscalationSeverity,
     },
 
-    // Research mode stubs (no fields yet).
+    // Research mode: lower to ResearchCommand variants.
+    // SaveCandidate and RejectHypothesis are workflow intents
+    // that record decisions but do not produce runtime actions.
     RunBacktest,
     AbortBacktest,
     AdjustParameters,

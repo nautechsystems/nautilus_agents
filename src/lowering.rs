@@ -53,6 +53,8 @@ pub enum LoweringError {
     NoPosition { instrument_id: InstrumentId },
     #[error("position is flat for {instrument_id}")]
     FlatPosition { instrument_id: InstrumentId },
+    #[error("unsupported constraint: {description}")]
+    UnsupportedConstraint { description: String },
     #[error("intent not lowerable: {description}")]
     NotLowerable { description: String },
 }
@@ -74,8 +76,9 @@ pub fn lower_intent(
         AgentIntent::ReducePosition {
             instrument_id,
             quantity,
-            ..
+            constraints,
         } => {
+            reject_unsupported_constraints(constraints)?;
             let position = find_position(context, instrument_id, lowering.strategy_id)?;
             let close_side = closing_side(position.side, *instrument_id)?;
             let order_init = market_order_init(
@@ -93,7 +96,11 @@ pub fn lower_intent(
             ))))
         }
 
-        AgentIntent::ClosePosition { instrument_id, .. } => {
+        AgentIntent::ClosePosition {
+            instrument_id,
+            constraints,
+        } => {
+            reject_unsupported_constraints(constraints)?;
             let position = find_position(context, instrument_id, lowering.strategy_id)?;
             let close_side = closing_side(position.side, *instrument_id)?;
             let order_init = market_order_init(
@@ -178,6 +185,32 @@ pub fn lower_intent(
             })
         }
     }
+}
+
+/// v0 lowering only produces market IOC orders. Reject constraints
+/// that imply limit or algorithmic execution rather than silently
+/// ignoring them.
+fn reject_unsupported_constraints(
+    constraints: &crate::intent::ExecutionConstraints,
+) -> Result<(), LoweringError> {
+    if constraints.limit_price.is_some() {
+        return Err(LoweringError::UnsupportedConstraint {
+            description: "limit_price requires limit order support".to_string(),
+        });
+    }
+
+    if constraints.target_price.is_some() {
+        return Err(LoweringError::UnsupportedConstraint {
+            description: "target_price requires algorithmic execution".to_string(),
+        });
+    }
+
+    if constraints.max_slippage_pct.is_some() {
+        return Err(LoweringError::UnsupportedConstraint {
+            description: "max_slippage_pct requires slippage control".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn find_position<'a>(

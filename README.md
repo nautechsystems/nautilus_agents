@@ -9,13 +9,15 @@ This crate defines the contract between an agent policy and the Nautilus
 trading engine. Agents observe state, express decisions through a
 structured protocol, and every cycle is recorded for replay and audit.
 
-- Automate backtest iteration: hypotheses, parameter sweeps, result
-  comparison.
+- Automate backtest iteration: hypotheses, parameter sweeps, result comparison.
 - Monitor live systems: detect anomalies, reduce exposure, escalate.
 - Record every decision for reproducible analysis.
 
 > [!WARNING]
-> Early development. The API is not yet stable.
+> Early alpha. The API is not stable and may change between versions.
+> Research and risk management workflows are the current focus.
+> Execution-tier features (entry orders, limit strategies) are not yet
+> implemented.
 
 ## Platform
 
@@ -71,8 +73,6 @@ flowchart TD
 
 ## What this crate does not ship
 
-This crate does not ship:
-
 - An LLM runtime, agent harness, or prompt framework.
 - A chat UI or Telegram-style control surface.
 - The live MCP or axum server.
@@ -100,21 +100,38 @@ the agent monitors and protects.
 parameters. The full trading surface, unlocked after research and risk
 management are proven.
 
-## Current v0 scope
+## Current scope
 
-- `DecisionPipeline` runs policy evaluation, capability checks, dual
-  guardrails, lowering, and envelope creation.
-- Risk management intents are lowerable today:
-  `ReducePosition`, `ClosePosition`, `CancelOrder`, `CancelAllOrders`.
-- Research-mode types are defined. Research lowering is next.
-- `DecisionRecorder` writes JSONL. Replay reads it back and compares
-  outcomes across policy or guardrail changes.
-- `PositionLimitGuardrail` enforces per-order quantity limits.
+Research and risk management intents are lowerable today:
+
+- **Research**: `RunBacktest`, `AbortBacktest`, `AdjustParameters`,
+  `CompareResults` lower to `ResearchCommand` variants.
+  `SaveCandidate` and `RejectHypothesis` are workflow intents that
+  record decisions without producing runtime actions.
+- **Risk management**: `ReducePosition`, `ClosePosition`, `CancelOrder`,
+  `CancelAllOrders` lower to trading commands.
+- **Pipeline**: `DecisionPipeline` runs policy evaluation, capability
+  checks, dual guardrails, lowering with explicit outcome tracking, and
+  envelope creation.
+- **Replay**: `DecisionRecorder` writes JSONL. The replay engine reads it
+  back and compares outcomes across policy or guardrail changes.
+- **Guardrails**: `PositionLimitGuardrail` enforces per-order quantity
+  limits. The envelope separates lowering failures from guardrail
+  rejections for clear audit trails.
+
+## Examples
+
+See the [`examples/`](examples/) directory:
+
+- [`research_workflow.rs`](examples/research_workflow.rs): run a backtest
+  iteration cycle through the decision pipeline.
+- [`risk_monitoring.rs`](examples/risk_monitoring.rs): detect a position
+  anomaly and reduce exposure through guardrails.
 
 ## Module map
 
-| Module       | Purpose                                            |
-|--------------|----------------------------------------------------|
+| Module       | Purpose                                           |
+|--------------|---------------------------------------------------|
 | `context`    | Owned policy input built from Nautilus snapshots.  |
 | `policy`     | `AgentPolicy`, `PolicyDecision`, `PolicyError`.    |
 | `intent`     | Semantic action vocabulary and constraints.        |
@@ -127,6 +144,23 @@ management are proven.
 | `envelope`   | Canonical decision record types.                   |
 | `recording`  | JSONL recording for decision envelopes.            |
 | `replay`     | Replay reader, runner, and outcome comparison.     |
+
+## Roadmap
+
+Near-term priorities, in order:
+
+1. **Research workflow depth.** Add fields to research intent variants for
+   backtest configuration, parameter sets, and result handles. Connect to
+   the NautilusTrader backtest engine.
+2. **Async policy contract.** Move `AgentPolicy::evaluate` to async with
+   borrowed context. Required for LLM-backed and remote policies.
+3. **Multi-intent plans.** Replace single-intent `PolicyDecision::Act`
+   with `ActionPlan` carrying multiple correlated intents.
+4. **Execution tier.** Entry orders, limit strategies, and venue-specific
+   execution. Unlocked after research and risk management are proven.
+
+Execution-tier features are intentionally deferred. The protocol earns
+trust through research and defensive operations first.
 
 ## Relationship to NautilusTrader
 
@@ -143,14 +177,9 @@ It does not duplicate engine models with protocol-native copies.
 `AgentContext` uses the real Nautilus snapshot and report types directly.
 `AgentIntent` is the seam between policy reasoning and execution.
 
-## Documentation
-
-See [the docs](https://docs.nautilustrader.io) for API details.
-
 ## License
 
-The source code for NautilusTrader is available on GitHub under the
-[GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.en.html).
+Licensed under the [GNU Lesser General Public License v3.0](LICENSE).
 
 ---
 

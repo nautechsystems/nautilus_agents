@@ -59,6 +59,7 @@ Thumbs.db
 mcp/*.json
 .claude/
 claude.config.json
+.codex
 .codex/
 .cursor/
 .aider*

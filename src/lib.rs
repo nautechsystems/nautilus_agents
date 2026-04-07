@@ -139,7 +139,6 @@ mod tests {
             instrument_id: test_instrument_id(),
             quantity: Quantity::from("0.5"),
             constraints: ExecutionConstraints {
-                max_slippage_pct: Some(0.001),
                 reduce_only: true,
                 ..Default::default()
             },
@@ -189,7 +188,6 @@ mod tests {
             }) => {
                 assert_eq!(instrument_id, test_instrument_id());
                 assert_eq!(quantity, Quantity::from("0.5"));
-                assert_eq!(constraints.max_slippage_pct, Some(0.001));
                 assert!(constraints.reduce_only);
             }
             other => panic!("unexpected variant: {other:?}"),
@@ -530,6 +528,53 @@ mod tests {
             },
             other => panic!("expected Trade, got {other:?}"),
         }
+    }
+
+    #[rstest]
+    fn test_lower_rejects_limit_price_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints {
+                limit_price: Some(Price::from("68000.00")),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("limit_price"));
+    }
+
+    #[rstest]
+    fn test_lower_rejects_target_price_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints {
+                target_price: Some(Price::from("70000.00")),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("target_price"));
+    }
+
+    #[rstest]
+    fn test_lower_rejects_max_slippage_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints {
+                max_slippage_pct: Some(0.001),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("max_slippage_pct"));
     }
 
     #[rstest]
