@@ -100,6 +100,37 @@ the agent monitors and protects.
 parameters. The full trading surface, unlocked after research and risk
 management are proven.
 
+## Design principles
+
+**Deny-by-default capabilities.** An agent can only observe data and emit
+intents that its `CapabilitySet` explicitly grants. Everything else is
+denied. This follows the object-capability model: authority comes from
+possession of a capability token, not from ambient access.
+
+**Intent and action separation.** An `AgentIntent` expresses what the
+agent wants to do. A `RuntimeAction` is what the engine executes. The
+translation between them ("lowering") is explicit, auditable, and
+rejects combinations it cannot safely produce. The same separation
+compilers use between high-level IR and machine code.
+
+**Canonical decision record.** Every decision cycle produces a
+`DecisionEnvelope` containing the trigger, context, decision, guardrail
+outcomes, lowering result, and reconciliation. One record per cycle,
+no gaps: the envelope is the single source of truth for replay and
+audit.
+
+**Dual guardrails.** Guardrails run twice: before lowering (semantic
+checks on the intent) and after lowering (concrete checks on the
+action). Two different failure classes, both recorded. The same
+pre/post validation pattern used in middleware pipelines and compiler
+passes.
+
+**Deterministic replay.** Recorded envelopes can be re-evaluated through
+a different pipeline to compare outcomes. Change a guardrail threshold
+or a policy, replay last week's decisions, and see where the new
+configuration diverges. Built on the same principle as NautilusTrader's
+backtesting engine.
+
 ## Current scope
 
 Research and risk management intents are lowerable today:
