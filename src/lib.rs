@@ -25,11 +25,13 @@ pub mod capability;
 pub mod context;
 pub mod envelope;
 pub mod guardrail;
+pub mod guardrails;
 pub mod intent;
 pub mod lowering;
 pub mod pipeline;
 pub mod policy;
 pub mod recording;
+pub mod replay;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -53,11 +55,13 @@ pub mod prelude {
             ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
+        guardrails::position_limit::PositionLimitGuardrail,
         intent::{AgentIntent, EscalationSeverity, ExecutionConstraints},
         lowering::{LoweringContext, LoweringError, lower_intent},
         pipeline::{DecisionPipeline, PipelineError},
         policy::{AgentPolicy, PolicyDecision, PolicyError},
         recording::{DecisionRecorder, RecordingError},
+        replay::{ReplayConfig, ReplayError, ReplayResult, ReplayRunner, read_envelopes},
     };
 }
 
@@ -84,11 +88,13 @@ mod tests {
             ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
+        guardrails::position_limit::PositionLimitGuardrail,
         intent::{AgentIntent, ExecutionConstraints},
         lowering::{LoweringContext, lower_intent},
         pipeline::DecisionPipeline,
         policy::{AgentPolicy, PolicyDecision, PolicyError},
         recording::DecisionRecorder,
+        replay::{ReplayConfig, ReplayRunner, read_envelopes},
     };
 
     fn test_instrument_id() -> InstrumentId {
@@ -778,5 +784,316 @@ mod tests {
         assert_eq!(restored2.envelope_id, envelope2.envelope_id);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_record_then_read_fidelity() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let recorder = DecisionRecorder::new(&path);
+
+        let envelope1 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            intent_guardrail: None,
+            lowered_action: None,
+            action_guardrail: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let envelope2 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::MarketData {
+                instrument_id: test_instrument_id(),
+            },
+            context: test_context(),
+            decision: PolicyDecision::Act(test_intent()),
+            intent_guardrail: Some(GuardrailResult::Approved),
+            lowered_action: None,
+            action_guardrail: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_001_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        recorder.record(&envelope1).unwrap();
+        recorder.record(&envelope2).unwrap();
+
+        let restored = read_envelopes(&path).unwrap();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].envelope_id, envelope1.envelope_id);
+        assert_eq!(restored[1].envelope_id, envelope2.envelope_id);
+        assert!(matches!(restored[0].decision, PolicyDecision::NoAction));
+        assert!(matches!(restored[1].decision, PolicyDecision::Act(_)));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_read_envelopes_malformed_line() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_bad_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "{\"valid\":false}\n{not json\n").unwrap();
+
+        let err = read_envelopes(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 1"), "expected line 1 error, got: {msg}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_different_policy_changes_decision() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_diff_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Record an Act envelope using a policy that acts.
+        let act_policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(act_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let original = pipeline.run(trigger, test_context_with_position()).unwrap();
+        assert!(matches!(original.decision, PolicyDecision::Act(_)));
+
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&original).unwrap();
+
+        // Replay with a NoAction policy.
+        let no_action_policy = FixedPolicy(PolicyDecision::NoAction);
+        let replay_pipeline =
+            DecisionPipeline::new(Box::new(no_action_policy), test_lowering_ctx());
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = runner.run(envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+        assert!(results[0].summary().contains("changed"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_stricter_guardrail_rejects() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_guard_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Record an envelope approved by a permissive guardrail.
+        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let original = pipeline.run(trigger, test_context_with_position()).unwrap();
+        assert!(matches!(
+            original.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&original).unwrap();
+
+        // Replay with a stricter guardrail that rejects everything.
+        let replay_policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let replay_pipeline = DecisionPipeline::new(Box::new(replay_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(RejectAllIntents("stricter limit".to_string())));
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = runner.run(envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        // Original was approved, replayed is rejected: outcome changed.
+        assert!(results[0].decision_changed());
+        assert!(matches!(
+            results[0].original.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(matches!(
+            results[0].replayed.intent_guardrail,
+            Some(GuardrailResult::Rejected { .. })
+        ));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_skip_no_action() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_skip_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let recorder = DecisionRecorder::new(&path);
+
+        let no_action_envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            intent_guardrail: None,
+            lowered_action: None,
+            action_guardrail: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+        recorder.record(&no_action_envelope).unwrap();
+
+        let envelopes = read_envelopes(&path).unwrap();
+        assert_eq!(envelopes.len(), 1);
+
+        let policy = FixedPolicy(PolicyDecision::NoAction);
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let config = ReplayConfig {
+            skip_no_action: true,
+        };
+        let runner = ReplayRunner::new(pipeline, config);
+        let results = runner.run(envelopes).unwrap();
+        assert_eq!(results.len(), 0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_position_limit_approves_under_limit() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("1.0"));
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints::default(),
+        };
+        let result = guardrail.evaluate(&intent, &test_context());
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_position_limit_rejects_over_limit() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("0.3"));
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints::default(),
+        };
+        let result = guardrail.evaluate(&intent, &test_context());
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert!(reason.contains("exceeds max_order_quantity"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_position_limit_close_rejects_over_limit() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("1.0"));
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+        // Context with position qty 1.5 exceeds limit of 1.0.
+        let ctx = test_context_with_position();
+        let result = guardrail.evaluate(&intent, &ctx);
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert!(reason.contains("exceeds max_order_quantity"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_position_limit_close_approves_under_limit() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("2.0"));
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+        // Context with position qty 1.5 is under limit of 2.0.
+        let ctx = test_context_with_position();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_position_limit_ignores_other_intents() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("0.001"));
+        let intent = AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-123"),
+        };
+        let result = guardrail.evaluate(&intent, &test_context());
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_position_limit_reduce_at_exact_limit_approves() {
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("0.5"));
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints::default(),
+        };
+        let result = guardrail.evaluate(&intent, &test_context());
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_position_limit_close_filters_by_strategy() {
+        let mut ctx = test_context_with_position();
+        // Add a large position under a different strategy for the same instrument.
+        let mut other_position = test_position_snapshot();
+        other_position.strategy_id = StrategyId::new("Other-001");
+        other_position.position_id = PositionId::new("P-OTHER");
+        other_position.quantity = Quantity::from("5.0");
+        other_position.signed_qty = 5.0;
+        ctx.positions.push(other_position);
+
+        // Guardrail for EMACross-001 with limit 2.0.
+        // EMACross-001 position is 1.5 (under limit), Other-001 is 5.0 (over limit).
+        let guardrail =
+            PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("2.0"));
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_read_envelopes_missing_file() {
+        let path = std::env::temp_dir().join(format!("nonexistent_{}.jsonl", UUID4::new()));
+        let err = read_envelopes(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("I/O error"), "expected I/O error, got: {msg}");
     }
 }
