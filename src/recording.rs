@@ -20,9 +20,11 @@
 //! a file. This is the v0 recording format; future versions may use
 //! Cap'n Proto or a columnar format.
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use crate::envelope::DecisionEnvelope;
 

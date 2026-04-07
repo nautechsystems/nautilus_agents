@@ -21,10 +21,9 @@
 //! evaluates the [`RuntimeAction`](crate::action::RuntimeAction) after
 //! lowering (venue constraints, compute limits).
 
-use crate::action::RuntimeAction;
-use crate::context::AgentContext;
-use crate::envelope::GuardrailResult;
-use crate::intent::AgentIntent;
+use crate::{
+    action::RuntimeAction, context::AgentContext, envelope::GuardrailResult, intent::AgentIntent,
+};
 
 /// Pre-lowering guardrail. Evaluates a semantic intent against the
 /// current context before the intent is lowered to a runtime action.

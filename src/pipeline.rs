@@ -26,15 +26,18 @@
 
 use nautilus_core::UUID4;
 
-use crate::action::RuntimeAction;
-use crate::context::AgentContext;
-use crate::envelope::{
-    DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome,
+use crate::{
+    action::RuntimeAction,
+    context::AgentContext,
+    envelope::{
+        DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION, GuardrailResult,
+        LoweringOutcome,
+    },
+    guardrail::{ActionGuardrail, IntentGuardrail},
+    intent::AgentIntent,
+    lowering::{LoweringContext, lower_intent},
+    policy::{AgentPolicy, PolicyDecision, PolicyError},
 };
-use crate::guardrail::{ActionGuardrail, IntentGuardrail};
-use crate::intent::AgentIntent;
-use crate::lowering::{LoweringContext, lower_intent};
-use crate::policy::{AgentPolicy, PolicyDecision, PolicyError};
 
 /// The only failure mode is a policy error: the policy itself failed
 /// to produce a decision. Capability denials and lowering failures

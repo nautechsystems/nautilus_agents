@@ -1,0 +1,7 @@
+# Version pins for external binaries without a native manifest.
+#
+# Rust toolchain: rust-toolchain.toml
+# Cargo CLIs:     Cargo.toml [workspace.metadata.tools]
+
+[prek]
+version = "0.3.8"

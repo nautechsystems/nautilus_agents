@@ -22,6 +22,7 @@
 
 use std::collections::BTreeSet;
 
+use nautilus_agents::prelude::*;
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     enums::{CurrencyType, OrderSide, PositionSide},
@@ -29,8 +30,6 @@ use nautilus_model::{
     identifiers::{AccountId, ClientOrderId, PositionId, StrategyId, TraderId},
     types::{Currency, Quantity},
 };
-
-use nautilus_agents::prelude::*;
 
 const MAX_POSITION_QTY: &str = "2.0";
 const REDUCE_TO_QTY: &str = "1.0";

@@ -40,7 +40,7 @@ format:  #-- Format Rust code (nightly rustfmt)
 
 .PHONY: pre-commit
 pre-commit:  #-- Run all pre-commit hooks on all files
-	pre-commit run --all-files
+	prek run --all-files
 
 .PHONY: check-code
 check-code:  #-- Run clippy linter

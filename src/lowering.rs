@@ -35,9 +35,11 @@ use nautilus_model::{
     types::Quantity,
 };
 
-use crate::action::{ResearchCommand, RuntimeAction, TradeAction};
-use crate::context::AgentContext;
-use crate::intent::AgentIntent;
+use crate::{
+    action::{ResearchCommand, RuntimeAction, TradeAction},
+    context::AgentContext,
+    intent::AgentIntent,
+};
 
 /// Identifiers that intents do not carry. Supplied by the runtime
 /// when constructing the pipeline.

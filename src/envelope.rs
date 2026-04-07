@@ -26,9 +26,7 @@ use nautilus_model::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::action::RuntimeAction;
-use crate::context::AgentContext;
-use crate::policy::PolicyDecision;
+use crate::{action::RuntimeAction, context::AgentContext, policy::PolicyDecision};
 
 /// Stays at 1 until the envelope contract is finalized.
 pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;

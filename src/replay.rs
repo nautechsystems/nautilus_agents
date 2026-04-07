@@ -19,17 +19,15 @@
 //! re-evaluates them through a [`DecisionPipeline`], and compares original
 //! decisions against replayed outcomes.
 
-use std::fmt;
-use std::fs;
-use std::path::Path;
+use std::{fmt, fs, path::Path};
 
-use crate::action::RuntimeAction;
-use crate::envelope::{
-    DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome,
+use crate::{
+    action::RuntimeAction,
+    envelope::{DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome},
+    intent::AgentIntent,
+    pipeline::{DecisionPipeline, PipelineError},
+    policy::PolicyDecision,
 };
-use crate::intent::AgentIntent;
-use crate::pipeline::{DecisionPipeline, PipelineError};
-use crate::policy::PolicyDecision;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {

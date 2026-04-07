@@ -22,8 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::AgentContext;
-use crate::intent::AgentIntent;
+use crate::{context::AgentContext, intent::AgentIntent};
 
 /// Guardrails only evaluate the `Act` variant.
 #[non_exhaustive]

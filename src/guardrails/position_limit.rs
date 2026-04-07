@@ -21,10 +21,10 @@
 
 use nautilus_model::{identifiers::StrategyId, types::Quantity};
 
-use crate::context::AgentContext;
-use crate::envelope::GuardrailResult;
-use crate::guardrail::IntentGuardrail;
-use crate::intent::AgentIntent;
+use crate::{
+    context::AgentContext, envelope::GuardrailResult, guardrail::IntentGuardrail,
+    intent::AgentIntent,
+};
 
 /// Rejects position-reducing intents whose order quantity exceeds
 /// `max_order_quantity`.

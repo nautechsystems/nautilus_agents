@@ -57,7 +57,7 @@ repos:
         description: Lint Dockerfiles for best practices and errors
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.40.0  # Pinned: autoupdate bumps to moving v1 tag
+    rev: v1.45.0
     hooks:
       - id: typos
         description: Checks for common typos
@@ -81,7 +81,7 @@ repos:
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.11
+    rev: v1.7.12
     hooks:
       - id: actionlint
         name: actionlint (syntax/structure)
