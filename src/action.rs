@@ -17,11 +17,14 @@
 //!
 //! [`RuntimeAction`] branches by operational mode: [`TradeAction`] wraps
 //! concrete trading command structs from `nautilus-common` (which implement
-//! `Serialize`), and [`ResearchCommand`] provides stubs for research mode.
+//! `Serialize`), and [`ResearchCommand`] carries backtest configuration
+//! for the research executor.
 
 use nautilus_common::messages::execution::{
     BatchCancelOrders, CancelAllOrders, CancelOrder, ModifyOrder, SubmitOrder, SubmitOrderList,
 };
+use nautilus_core::UnixNanos;
+use nautilus_model::identifiers::InstrumentId;
 use serde::{Deserialize, Serialize};
 
 /// Branches by operational mode after lowering an
@@ -49,16 +52,31 @@ pub enum TradeAction {
     BatchCancelOrders(BatchCancelOrders),
 }
 
-/// Executable research commands (stubs for v0). Workflow actions like
-/// SaveCandidate and RejectHypothesis stay in the intent layer.
+/// Executable research commands. Workflow actions like SaveCandidate
+/// and RejectHypothesis stay in the intent layer.
 /// AdjustParameters lowers into a new RunBacktest configuration.
 #[non_exhaustive]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ResearchCommand {
-    RunBacktest,
-    CancelBacktest,
-    GetBacktestStatus,
-    GetBacktestResult,
-    CompareBacktests,
+    RunBacktest {
+        instrument_id: InstrumentId,
+        catalog_path: String,
+        data_cls: String,
+        bar_spec: Option<String>,
+        start_ns: Option<UnixNanos>,
+        end_ns: Option<UnixNanos>,
+    },
+    CancelBacktest {
+        run_id: String,
+    },
+    GetBacktestStatus {
+        run_id: String,
+    },
+    GetBacktestResult {
+        run_id: String,
+    },
+    CompareBacktests {
+        run_ids: Vec<String>,
+    },
 }

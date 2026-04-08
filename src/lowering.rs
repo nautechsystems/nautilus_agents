@@ -171,14 +171,49 @@ pub fn lower_intent(
             description: intent_variant_name(intent).to_string(),
         }),
 
-        AgentIntent::RunBacktest => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest)),
+        AgentIntent::RunBacktest {
+            instrument_id,
+            catalog_path,
+            data_cls,
+            bar_spec,
+            start_ns,
+            end_ns,
+        } => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest {
+            instrument_id: *instrument_id,
+            catalog_path: catalog_path.clone(),
+            data_cls: data_cls.clone(),
+            bar_spec: bar_spec.clone(),
+            start_ns: *start_ns,
+            end_ns: *end_ns,
+        })),
 
-        AgentIntent::AbortBacktest => Ok(RuntimeAction::Research(ResearchCommand::CancelBacktest)),
+        AgentIntent::AbortBacktest { run_id } => {
+            Ok(RuntimeAction::Research(ResearchCommand::CancelBacktest {
+                run_id: run_id.clone(),
+            }))
+        }
 
-        AgentIntent::AdjustParameters => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest)),
+        AgentIntent::AdjustParameters {
+            instrument_id,
+            catalog_path,
+            data_cls,
+            bar_spec,
+            start_ns,
+            end_ns,
+            ..
+        } => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest {
+            instrument_id: *instrument_id,
+            catalog_path: catalog_path.clone(),
+            data_cls: data_cls.clone(),
+            bar_spec: bar_spec.clone(),
+            start_ns: *start_ns,
+            end_ns: *end_ns,
+        })),
 
-        AgentIntent::CompareResults => {
-            Ok(RuntimeAction::Research(ResearchCommand::CompareBacktests))
+        AgentIntent::CompareResults { run_ids } => {
+            Ok(RuntimeAction::Research(ResearchCommand::CompareBacktests {
+                run_ids: run_ids.clone(),
+            }))
         }
 
         AgentIntent::SaveCandidate | AgentIntent::RejectHypothesis => {
@@ -316,10 +351,10 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::ResumeStrategy { .. } => "ResumeStrategy",
         AgentIntent::AdjustRiskLimits { .. } => "AdjustRiskLimits",
         AgentIntent::EscalateToHuman { .. } => "EscalateToHuman",
-        AgentIntent::RunBacktest => "RunBacktest",
-        AgentIntent::AbortBacktest => "AbortBacktest",
-        AgentIntent::AdjustParameters => "AdjustParameters",
-        AgentIntent::CompareResults => "CompareResults",
+        AgentIntent::RunBacktest { .. } => "RunBacktest",
+        AgentIntent::AbortBacktest { .. } => "AbortBacktest",
+        AgentIntent::AdjustParameters { .. } => "AdjustParameters",
+        AgentIntent::CompareResults { .. } => "CompareResults",
         AgentIntent::SaveCandidate => "SaveCandidate",
         AgentIntent::RejectHypothesis => "RejectHypothesis",
     }

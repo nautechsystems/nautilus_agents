@@ -134,6 +134,17 @@ mod tests {
         }
     }
 
+    fn test_run_backtest_intent() -> AgentIntent {
+        AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        }
+    }
+
     fn test_intent() -> AgentIntent {
         AgentIntent::ReducePosition {
             instrument_id: test_instrument_id(),
@@ -172,6 +183,37 @@ mod tests {
         };
         let intent = test_intent();
         assert!(caps.check_intent(&intent).is_err());
+    }
+
+    #[rstest]
+    fn test_capability_research_instrument_denied() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::from([ActionCapability::Research]),
+            instrument_scope: BTreeSet::from([InstrumentId::from("ETHUSDT.BINANCE")]),
+        };
+        let intent = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: None,
+            start_ns: None,
+            end_ns: None,
+        };
+        assert!(caps.check_intent(&intent).is_err());
+    }
+
+    #[rstest]
+    fn test_capability_abort_backtest_skips_instrument_scope() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::from([ActionCapability::Research]),
+            instrument_scope: BTreeSet::new(),
+        };
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-001".to_string(),
+        };
+        assert!(caps.check_intent(&intent).is_ok());
     }
 
     #[rstest]
@@ -331,11 +373,12 @@ mod tests {
     }
 
     #[rstest]
-    fn test_research_stub_round_trip() {
-        let intent = AgentIntent::RunBacktest;
+    fn test_research_round_trip() {
+        let intent = test_run_backtest_intent();
         let json = serde_json::to_string(&intent).unwrap();
         let restored: AgentIntent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(restored, AgentIntent::RunBacktest));
+        assert!(matches!(restored, AgentIntent::RunBacktest { .. }));
+        assert_eq!(restored, intent);
     }
 
     fn test_currency() -> Currency {
@@ -581,58 +624,157 @@ mod tests {
     fn test_lower_run_backtest() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let action =
-            lower_intent(&AgentIntent::RunBacktest, &ctx, &lowering, ctx.ts_context).unwrap();
-        assert!(matches!(
-            action,
-            RuntimeAction::Research(ResearchCommand::RunBacktest)
-        ));
+        let intent = test_run_backtest_intent();
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                instrument_id,
+                catalog_path,
+                data_cls,
+                bar_spec,
+                ..
+            }) => {
+                assert_eq!(instrument_id, test_instrument_id());
+                assert_eq!(catalog_path, "/data/catalog");
+                assert_eq!(data_cls, "Bar");
+                assert_eq!(bar_spec, Some("1-HOUR-BID".to_string()));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
     }
 
     #[rstest]
     fn test_lower_abort_backtest() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let action =
-            lower_intent(&AgentIntent::AbortBacktest, &ctx, &lowering, ctx.ts_context).unwrap();
-        assert!(matches!(
-            action,
-            RuntimeAction::Research(ResearchCommand::CancelBacktest)
-        ));
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-001".to_string(),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::CancelBacktest { run_id }) => {
+                assert_eq!(run_id, "run-001");
+            }
+            other => panic!("expected Research(CancelBacktest), got {other:?}"),
+        }
     }
 
     #[rstest]
     fn test_lower_adjust_parameters_produces_run_backtest() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let action = lower_intent(
-            &AgentIntent::AdjustParameters,
-            &ctx,
-            &lowering,
-            ctx.ts_context,
-        )
-        .unwrap();
-        assert!(matches!(
-            action,
-            RuntimeAction::Research(ResearchCommand::RunBacktest)
-        ));
+        let intent = AgentIntent::AdjustParameters {
+            baseline_run_id: "run-001".to_string(),
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                instrument_id,
+                catalog_path,
+                data_cls,
+                bar_spec,
+                start_ns,
+                end_ns,
+            }) => {
+                assert_eq!(instrument_id, test_instrument_id());
+                assert_eq!(catalog_path, "/data/catalog");
+                assert_eq!(data_cls, "Bar");
+                assert_eq!(bar_spec, Some("5-MINUTE-MID".to_string()));
+                assert_eq!(start_ns, None);
+                assert_eq!(end_ns, None);
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
     }
 
     #[rstest]
     fn test_lower_compare_results() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let action = lower_intent(
-            &AgentIntent::CompareResults,
-            &ctx,
-            &lowering,
-            ctx.ts_context,
-        )
-        .unwrap();
-        assert!(matches!(
-            action,
-            RuntimeAction::Research(ResearchCommand::CompareBacktests)
-        ));
+        let intent = AgentIntent::CompareResults {
+            run_ids: vec!["run-001".to_string(), "run-002".to_string()],
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::CompareBacktests { run_ids }) => {
+                assert_eq!(run_ids, vec!["run-001", "run-002"]);
+            }
+            other => panic!("expected Research(CompareBacktests), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_run_backtest_with_time_range() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let start = UnixNanos::from(1_700_000_000_000_000_000u64);
+        let end = UnixNanos::from(1_712_000_000_000_000_000u64);
+        let intent = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "QuoteTick".to_string(),
+            bar_spec: None,
+            start_ns: Some(start),
+            end_ns: Some(end),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                data_cls,
+                bar_spec,
+                start_ns,
+                end_ns,
+                ..
+            }) => {
+                assert_eq!(data_cls, "QuoteTick");
+                assert_eq!(bar_spec, None);
+                assert_eq!(start_ns, Some(start));
+                assert_eq!(end_ns, Some(end));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_abort_backtest_round_trip() {
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-abc".to_string(),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
+    }
+
+    #[rstest]
+    fn test_compare_results_round_trip() {
+        let intent = AgentIntent::CompareResults {
+            run_ids: vec!["run-001".to_string(), "run-002".to_string()],
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
+    }
+
+    #[rstest]
+    fn test_adjust_parameters_round_trip() {
+        let intent = AgentIntent::AdjustParameters {
+            baseline_run_id: "run-001".to_string(),
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
     }
 
     #[rstest]
@@ -1107,6 +1249,52 @@ mod tests {
     }
 
     #[rstest]
+    fn test_replay_detects_research_payload_change() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_research_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Record with a policy that emits RunBacktest with 1-HOUR-BID bar spec.
+        let intent_a = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let policy_a = FixedPolicy(PolicyDecision::Act(intent_a));
+        let pipeline_a = DecisionPipeline::new(Box::new(policy_a), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let original = pipeline_a.run(trigger, test_research_context()).unwrap();
+
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&original).unwrap();
+
+        // Replay with a policy that emits RunBacktest with a different bar spec.
+        let intent_b = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let policy_b = FixedPolicy(PolicyDecision::Act(intent_b));
+        let pipeline_b = DecisionPipeline::new(Box::new(policy_b), test_lowering_ctx());
+        let runner = ReplayRunner::new(pipeline_b, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = runner.run(envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
     fn test_position_limit_approves_under_limit() {
         let guardrail =
             PositionLimitGuardrail::new(StrategyId::new("EMACross-001"), Quantity::from("1.0"));
@@ -1220,7 +1408,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_research_denied_without_capability() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::RunBacktest));
+        let policy = FixedPolicy(PolicyDecision::Act(test_run_backtest_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let trigger = DecisionTrigger::Timer {
@@ -1243,7 +1431,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_research_intent_lowers_successfully() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::RunBacktest));
+        let policy = FixedPolicy(PolicyDecision::Act(test_run_backtest_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let trigger = DecisionTrigger::Timer {
@@ -1256,7 +1444,7 @@ mod tests {
             Some(LoweringOutcome::Success)
         ));
         match &envelope.lowered_action {
-            Some(RuntimeAction::Research(ResearchCommand::RunBacktest)) => {}
+            Some(RuntimeAction::Research(ResearchCommand::RunBacktest { .. })) => {}
             other => panic!("expected Research(RunBacktest), got {other:?}"),
         }
     }

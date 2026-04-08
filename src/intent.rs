@@ -21,6 +21,7 @@
 //! execution details (order type, time in force, algorithm) within the
 //! bounds the constraint block provides.
 
+use nautilus_core::UnixNanos;
 use nautilus_model::{
     enums::OrderSide,
     identifiers::{ClientOrderId, InstrumentId, StrategyId},
@@ -88,10 +89,29 @@ pub enum AgentIntent {
     // Research mode: lower to ResearchCommand variants.
     // SaveCandidate and RejectHypothesis are workflow intents
     // that record decisions but do not produce runtime actions.
-    RunBacktest,
-    AbortBacktest,
-    AdjustParameters,
-    CompareResults,
+    RunBacktest {
+        instrument_id: InstrumentId,
+        catalog_path: String,
+        data_cls: String,
+        bar_spec: Option<String>,
+        start_ns: Option<UnixNanos>,
+        end_ns: Option<UnixNanos>,
+    },
+    AbortBacktest {
+        run_id: String,
+    },
+    AdjustParameters {
+        baseline_run_id: String,
+        instrument_id: InstrumentId,
+        catalog_path: String,
+        data_cls: String,
+        bar_spec: Option<String>,
+        start_ns: Option<UnixNanos>,
+        end_ns: Option<UnixNanos>,
+    },
+    CompareResults {
+        run_ids: Vec<String>,
+    },
     SaveCandidate,
     RejectHypothesis,
 }

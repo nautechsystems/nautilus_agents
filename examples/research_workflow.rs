@@ -31,7 +31,14 @@ struct BacktestIterationPolicy;
 
 impl AgentPolicy for BacktestIterationPolicy {
     fn evaluate(&self, _context: AgentContext) -> Result<PolicyDecision, PolicyError> {
-        Ok(PolicyDecision::Act(AgentIntent::RunBacktest))
+        Ok(PolicyDecision::Act(AgentIntent::RunBacktest {
+            instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        }))
     }
 }
 
@@ -80,7 +87,7 @@ fn main() {
 
     match &envelope.lowered_action {
         Some(RuntimeAction::Research(cmd)) => {
-            println!("Research command produced: {cmd:?}");
+            println!("Research command: {cmd:?}");
         }
         other => {
             println!("Unexpected action: {other:?}");

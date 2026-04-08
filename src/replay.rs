@@ -91,10 +91,11 @@ impl ReplayResult {
     /// Returns `true` when the replayed outcome differs from the original.
     ///
     /// Compares the policy decision (including intent content), intent
-    /// guardrail result, lowering outcome, lowered action variant, and
-    /// action guardrail result. Trade action payloads are not compared
-    /// because `lower_intent` generates fresh UUIDs each run; only the
-    /// variant discriminant (SubmitOrder vs CancelOrder, etc.) is checked.
+    /// guardrail result, lowering outcome, lowered action, and action
+    /// guardrail result. Research commands compare the full payload
+    /// (fields are deterministic). Trade action payloads compare only
+    /// the variant discriminant because `lower_intent` generates fresh
+    /// UUIDs each run.
     pub fn decision_changed(&self) -> bool {
         !decisions_match(&self.original.decision, &self.replayed.decision)
             || !guardrails_match(
@@ -199,16 +200,14 @@ impl ReplayRunner {
     }
 }
 
-/// Compares lowered actions by variant discriminant. UUID fields
-/// inside trade payloads differ between runs, so payload comparison
-/// is skipped. Variant-level comparison still catches changes like
-/// SubmitOrder to CancelOrder or RunBacktest to CompareBacktests.
+/// Compares lowered actions. Trade actions use variant-discriminant
+/// comparison because `lower_intent` generates fresh UUIDs each run.
+/// Research commands carry deterministic fields derived from the
+/// intent, so they compare the full payload.
 fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => {
-            std::mem::discriminant(a) == std::mem::discriminant(b)
-        }
+        (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => a == b,
         (Some(RuntimeAction::Trade(a)), Some(RuntimeAction::Trade(b))) => {
             std::mem::discriminant(a.as_ref()) == std::mem::discriminant(b.as_ref())
         }
@@ -281,10 +280,10 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::ResumeStrategy { .. } => "ResumeStrategy",
         AgentIntent::AdjustRiskLimits { .. } => "AdjustRiskLimits",
         AgentIntent::EscalateToHuman { .. } => "EscalateToHuman",
-        AgentIntent::RunBacktest => "RunBacktest",
-        AgentIntent::AbortBacktest => "AbortBacktest",
-        AgentIntent::AdjustParameters => "AdjustParameters",
-        AgentIntent::CompareResults => "CompareResults",
+        AgentIntent::RunBacktest { .. } => "RunBacktest",
+        AgentIntent::AbortBacktest { .. } => "AbortBacktest",
+        AgentIntent::AdjustParameters { .. } => "AdjustParameters",
+        AgentIntent::CompareResults { .. } => "CompareResults",
         AgentIntent::SaveCandidate => "SaveCandidate",
         AgentIntent::RejectHypothesis => "RejectHypothesis",
     }

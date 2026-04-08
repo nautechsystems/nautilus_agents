@@ -102,10 +102,15 @@ impl CapabilitySet {
 
             AgentIntent::EscalateToHuman { .. } => (ActionCapability::Escalate, None),
 
-            AgentIntent::RunBacktest
-            | AgentIntent::AbortBacktest
-            | AgentIntent::AdjustParameters
-            | AgentIntent::CompareResults
+            AgentIntent::RunBacktest { instrument_id, .. }
+            | AgentIntent::AdjustParameters { instrument_id, .. } => {
+                (ActionCapability::Research, Some(*instrument_id))
+            }
+
+            // run_id-based intents cannot check instrument scope statically;
+            // the executor must verify scope when resolving the run_id.
+            AgentIntent::AbortBacktest { .. }
+            | AgentIntent::CompareResults { .. }
             | AgentIntent::SaveCandidate
             | AgentIntent::RejectHypothesis => (ActionCapability::Research, None),
         };
