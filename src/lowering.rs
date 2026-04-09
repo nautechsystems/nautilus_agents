@@ -36,7 +36,7 @@ use nautilus_model::{
 };
 
 use crate::{
-    action::{ResearchCommand, RuntimeAction, TradeAction},
+    action::{ManagementCommand, ResearchCommand, RuntimeAction, TradeAction},
     context::AgentContext,
     intent::AgentIntent,
 };
@@ -57,6 +57,11 @@ pub enum LoweringError {
     FlatPosition { instrument_id: InstrumentId },
     #[error("unsupported constraint: {description}")]
     UnsupportedConstraint { description: String },
+    #[error("strategy {target} not managed by this pipeline ({bound})")]
+    StrategyMismatch {
+        target: StrategyId,
+        bound: StrategyId,
+    },
     #[error("intent not lowerable: {description}")]
     NotLowerable { description: String },
 }
@@ -164,12 +169,36 @@ pub fn lower_intent(
             )))
         }
 
-        AgentIntent::PauseStrategy { .. }
-        | AgentIntent::ResumeStrategy { .. }
-        | AgentIntent::AdjustRiskLimits { .. }
-        | AgentIntent::EscalateToHuman { .. } => Err(LoweringError::NotLowerable {
-            description: intent_variant_name(intent).to_string(),
-        }),
+        AgentIntent::PauseStrategy { strategy_id } => {
+            check_strategy_scope(*strategy_id, lowering)?;
+            Ok(RuntimeAction::Management(
+                ManagementCommand::PauseStrategy {
+                    strategy_id: *strategy_id,
+                },
+            ))
+        }
+
+        AgentIntent::ResumeStrategy { strategy_id } => {
+            check_strategy_scope(*strategy_id, lowering)?;
+            Ok(RuntimeAction::Management(
+                ManagementCommand::ResumeStrategy {
+                    strategy_id: *strategy_id,
+                },
+            ))
+        }
+
+        AgentIntent::AdjustRiskLimits { params } => Ok(RuntimeAction::Management(
+            ManagementCommand::AdjustRiskLimits {
+                params: params.clone(),
+            },
+        )),
+
+        AgentIntent::EscalateToHuman { reason, severity } => Ok(RuntimeAction::Management(
+            ManagementCommand::EscalateToHuman {
+                reason: reason.clone(),
+                severity: *severity,
+            },
+        )),
 
         AgentIntent::RunBacktest {
             instrument_id,
@@ -216,12 +245,25 @@ pub fn lower_intent(
             }))
         }
 
-        AgentIntent::SaveCandidate | AgentIntent::RejectHypothesis => {
+        AgentIntent::SaveCandidate { .. } | AgentIntent::RejectHypothesis { .. } => {
             Err(LoweringError::NotLowerable {
                 description: intent_variant_name(intent).to_string(),
             })
         }
     }
+}
+
+fn check_strategy_scope(
+    target: StrategyId,
+    lowering: &LoweringContext,
+) -> Result<(), LoweringError> {
+    if target != lowering.strategy_id {
+        return Err(LoweringError::StrategyMismatch {
+            target,
+            bound: lowering.strategy_id,
+        });
+    }
+    Ok(())
 }
 
 /// v0 lowering only produces market IOC orders. Reject constraints
@@ -355,7 +397,7 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::AbortBacktest { .. } => "AbortBacktest",
         AgentIntent::AdjustParameters { .. } => "AdjustParameters",
         AgentIntent::CompareResults { .. } => "CompareResults",
-        AgentIntent::SaveCandidate => "SaveCandidate",
-        AgentIntent::RejectHypothesis => "RejectHypothesis",
+        AgentIntent::SaveCandidate { .. } => "SaveCandidate",
+        AgentIntent::RejectHypothesis { .. } => "RejectHypothesis",
     }
 }

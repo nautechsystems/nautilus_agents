@@ -112,8 +112,14 @@ pub enum AgentIntent {
     CompareResults {
         run_ids: Vec<String>,
     },
-    SaveCandidate,
-    RejectHypothesis,
+    SaveCandidate {
+        run_id: String,
+        label: String,
+    },
+    RejectHypothesis {
+        run_id: String,
+        reason: String,
+    },
 }
 
 /// Escalation severity for [`AgentIntent::EscalateToHuman`].

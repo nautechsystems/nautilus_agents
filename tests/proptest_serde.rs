@@ -13,11 +13,14 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Property-based serde round-trip tests for research types.
+//! Property-based serde round-trip tests for research and management types.
 
-use nautilus_agents::{action::ResearchCommand, intent::AgentIntent};
+use nautilus_agents::{
+    action::{ManagementCommand, ResearchCommand},
+    intent::{AgentIntent, EscalationSeverity},
+};
 use nautilus_core::UnixNanos;
-use nautilus_model::identifiers::InstrumentId;
+use nautilus_model::identifiers::{InstrumentId, StrategyId};
 use proptest::prelude::*;
 
 fn instrument_id_strategy() -> impl Strategy<Value = InstrumentId> {
@@ -158,6 +161,40 @@ proptest! {
         let cmd = ResearchCommand::CompareBacktests { run_ids };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(restored, cmd);
+    }
+
+    #[test]
+    fn prop_management_pause_resume_serde_round_trip(
+        name in "[A-Za-z]{3,10}",
+        tag in "[0-9]{1,5}",
+    ) {
+        let sid = StrategyId::new(format!("{name}-{tag}"));
+
+        let pause = ManagementCommand::PauseStrategy { strategy_id: sid };
+        let json = serde_json::to_string(&pause).unwrap();
+        let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(restored, pause);
+
+        let resume = ManagementCommand::ResumeStrategy { strategy_id: sid };
+        let json = serde_json::to_string(&resume).unwrap();
+        let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(restored, resume);
+    }
+
+    #[test]
+    fn prop_management_escalate_serde_round_trip(
+        reason in "[a-zA-Z0-9 _-]{1,100}",
+        severity_idx in 0u8..3,
+    ) {
+        let severity = match severity_idx {
+            0 => EscalationSeverity::Info,
+            1 => EscalationSeverity::Warning,
+            _ => EscalationSeverity::Critical,
+        };
+        let cmd = ManagementCommand::EscalateToHuman { reason, severity };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, cmd);
     }
 }

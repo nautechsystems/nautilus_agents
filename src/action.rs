@@ -16,16 +16,18 @@
 //! Runtime actions produced by lowering agent intents.
 //!
 //! [`RuntimeAction`] branches by operational mode: [`TradeAction`] wraps
-//! concrete trading command structs from `nautilus-common` (which implement
-//! `Serialize`), and [`ResearchCommand`] carries backtest configuration
-//! for the research executor.
+//! concrete trading command structs from `nautilus-common`,
+//! [`ResearchCommand`] carries backtest configuration, and
+//! [`ManagementCommand`] covers strategy lifecycle and escalation.
 
 use nautilus_common::messages::execution::{
     BatchCancelOrders, CancelAllOrders, CancelOrder, ModifyOrder, SubmitOrder, SubmitOrderList,
 };
 use nautilus_core::UnixNanos;
-use nautilus_model::identifiers::InstrumentId;
+use nautilus_model::identifiers::{InstrumentId, StrategyId};
 use serde::{Deserialize, Serialize};
+
+use crate::intent::EscalationSeverity;
 
 /// Branches by operational mode after lowering an
 /// [`AgentIntent`](crate::intent::AgentIntent).
@@ -35,6 +37,7 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeAction {
     Trade(Box<TradeAction>),
     Research(ResearchCommand),
+    Management(ManagementCommand),
 }
 
 /// Wraps individual command structs from `nautilus-common` (all
@@ -78,5 +81,26 @@ pub enum ResearchCommand {
     },
     CompareBacktests {
         run_ids: Vec<String>,
+    },
+}
+
+/// Strategy lifecycle, risk adjustment, and escalation commands.
+/// The server forwards these to the engine or notification system.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ManagementCommand {
+    PauseStrategy {
+        strategy_id: StrategyId,
+    },
+    ResumeStrategy {
+        strategy_id: StrategyId,
+    },
+    AdjustRiskLimits {
+        params: serde_json::Value,
+    },
+    EscalateToHuman {
+        reason: String,
+        severity: EscalationSeverity,
     },
 }

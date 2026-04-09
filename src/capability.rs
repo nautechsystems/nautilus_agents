@@ -111,8 +111,8 @@ impl CapabilitySet {
             // the executor must verify scope when resolving the run_id.
             AgentIntent::AbortBacktest { .. }
             | AgentIntent::CompareResults { .. }
-            | AgentIntent::SaveCandidate
-            | AgentIntent::RejectHypothesis => (ActionCapability::Research, None),
+            | AgentIntent::SaveCandidate { .. }
+            | AgentIntent::RejectHypothesis { .. } => (ActionCapability::Research, None),
         };
 
         if !self.can_act(required_cap) {

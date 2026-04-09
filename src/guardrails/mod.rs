@@ -15,4 +15,6 @@
 
 //! Concrete guardrail implementations.
 
+pub mod max_drawdown;
+pub mod order_rate;
 pub mod position_limit;

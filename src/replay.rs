@@ -22,7 +22,7 @@
 use std::{fmt, fs, path::Path};
 
 use crate::{
-    action::RuntimeAction,
+    action::{ManagementCommand, ResearchCommand, RuntimeAction},
     envelope::{DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome},
     intent::AgentIntent,
     pipeline::{DecisionPipeline, PipelineError},
@@ -202,12 +202,13 @@ impl ReplayRunner {
 
 /// Compares lowered actions. Trade actions use variant-discriminant
 /// comparison because `lower_intent` generates fresh UUIDs each run.
-/// Research commands carry deterministic fields derived from the
-/// intent, so they compare the full payload.
+/// Research and management commands carry deterministic fields derived
+/// from the intent, so they compare the full payload.
 fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => a == b,
+        (Some(RuntimeAction::Management(a)), Some(RuntimeAction::Management(b))) => a == b,
         (Some(RuntimeAction::Trade(a)), Some(RuntimeAction::Trade(b))) => {
             std::mem::discriminant(a.as_ref()) == std::mem::discriminant(b.as_ref())
         }
@@ -215,11 +216,29 @@ fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -
     }
 }
 
-fn action_label(action: &Option<RuntimeAction>) -> &'static str {
+fn action_label(action: &Option<RuntimeAction>) -> String {
     match action {
-        None => "none",
-        Some(RuntimeAction::Trade(_)) => "Trade",
-        Some(RuntimeAction::Research(_)) => "Research",
+        None => "none".to_string(),
+        Some(RuntimeAction::Trade(_)) => "Trade".to_string(),
+        Some(RuntimeAction::Research(cmd)) => {
+            let variant = match cmd {
+                ResearchCommand::RunBacktest { .. } => "RunBacktest",
+                ResearchCommand::CancelBacktest { .. } => "CancelBacktest",
+                ResearchCommand::GetBacktestStatus { .. } => "GetBacktestStatus",
+                ResearchCommand::GetBacktestResult { .. } => "GetBacktestResult",
+                ResearchCommand::CompareBacktests { .. } => "CompareBacktests",
+            };
+            format!("Research({variant})")
+        }
+        Some(RuntimeAction::Management(cmd)) => {
+            let variant = match cmd {
+                ManagementCommand::PauseStrategy { .. } => "PauseStrategy",
+                ManagementCommand::ResumeStrategy { .. } => "ResumeStrategy",
+                ManagementCommand::AdjustRiskLimits { .. } => "AdjustRiskLimits",
+                ManagementCommand::EscalateToHuman { .. } => "EscalateToHuman",
+            };
+            format!("Management({variant})")
+        }
     }
 }
 
@@ -284,8 +303,8 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::AbortBacktest { .. } => "AbortBacktest",
         AgentIntent::AdjustParameters { .. } => "AdjustParameters",
         AgentIntent::CompareResults { .. } => "CompareResults",
-        AgentIntent::SaveCandidate => "SaveCandidate",
-        AgentIntent::RejectHypothesis => "RejectHypothesis",
+        AgentIntent::SaveCandidate { .. } => "SaveCandidate",
+        AgentIntent::RejectHypothesis { .. } => "RejectHypothesis",
     }
 }
 

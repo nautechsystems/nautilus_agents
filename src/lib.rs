@@ -47,7 +47,7 @@ pub mod prelude {
     };
 
     pub use crate::{
-        action::{ResearchCommand, RuntimeAction, TradeAction},
+        action::{ManagementCommand, ResearchCommand, RuntimeAction, TradeAction},
         capability::{ActionCapability, CapabilitySet, ObservationCapability},
         context::AgentContext,
         envelope::{
@@ -55,7 +55,10 @@ pub mod prelude {
             LoweringOutcome, ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
-        guardrails::position_limit::PositionLimitGuardrail,
+        guardrails::{
+            max_drawdown::MaxDrawdownGuardrail, order_rate::OrderRateGuardrail,
+            position_limit::PositionLimitGuardrail,
+        },
         intent::{AgentIntent, EscalationSeverity, ExecutionConstraints},
         lowering::{LoweringContext, LoweringError, lower_intent},
         pipeline::{DecisionPipeline, PipelineError},
@@ -72,15 +75,17 @@ mod tests {
     use nautilus_core::{UUID4, UnixNanos};
     use nautilus_model::{
         data::QuoteTick,
-        enums::{CurrencyType, OrderSide, PositionSide},
-        events::PositionSnapshot,
+        enums::{
+            AccountType, CurrencyType, OrderSide, OrderStatus, OrderType, PositionSide, TimeInForce,
+        },
+        events::{AccountState, OrderSnapshot, PositionSnapshot},
         identifiers::{AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, TraderId},
-        types::{Currency, Price, Quantity},
+        types::{AccountBalance, Currency, Money, Price, Quantity},
     };
     use rstest::rstest;
 
     use crate::{
-        action::{ResearchCommand, RuntimeAction, TradeAction},
+        action::{ManagementCommand, ResearchCommand, RuntimeAction, TradeAction},
         capability::{ActionCapability, CapabilitySet, ObservationCapability},
         context::AgentContext,
         envelope::{
@@ -88,7 +93,10 @@ mod tests {
             LoweringOutcome, ReconciliationOutcome,
         },
         guardrail::{ActionGuardrail, IntentGuardrail},
-        guardrails::position_limit::PositionLimitGuardrail,
+        guardrails::{
+            max_drawdown::MaxDrawdownGuardrail, order_rate::OrderRateGuardrail,
+            position_limit::PositionLimitGuardrail,
+        },
         intent::{AgentIntent, ExecutionConstraints},
         lowering::{LoweringContext, lower_intent},
         pipeline::DecisionPipeline,
@@ -778,11 +786,94 @@ mod tests {
     }
 
     #[rstest]
+    fn test_lower_pause_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::PauseStrategy { strategy_id }) => {
+                assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
+            }
+            other => panic!("expected Management(PauseStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_resume_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ResumeStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::ResumeStrategy { strategy_id }) => {
+                assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
+            }
+            other => panic!("expected Management(ResumeStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_adjust_risk_limits() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let params = serde_json::json!({"max_drawdown_pct": 0.05});
+        let intent = AgentIntent::AdjustRiskLimits {
+            params: params.clone(),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::AdjustRiskLimits { params: lowered }) => {
+                assert_eq!(lowered, params);
+            }
+            other => panic!("expected Management(AdjustRiskLimits), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_escalate_to_human() {
+        use crate::intent::EscalationSeverity;
+
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::EscalateToHuman {
+            reason: "drawdown limit breached".to_string(),
+            severity: EscalationSeverity::Critical,
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::EscalateToHuman { reason, severity }) => {
+                assert_eq!(reason, "drawdown limit breached");
+                assert_eq!(severity, EscalationSeverity::Critical);
+            }
+            other => panic!("expected Management(EscalateToHuman), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_pause_strategy_rejects_cross_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("Other-999"),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("not managed by this pipeline"));
+    }
+
+    #[rstest]
     fn test_lower_save_candidate_not_lowerable() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let err =
-            lower_intent(&AgentIntent::SaveCandidate, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        let intent = AgentIntent::SaveCandidate {
+            run_id: "run-001".to_string(),
+            label: "best so far".to_string(),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
         assert!(err.to_string().contains("not lowerable"));
     }
 
@@ -790,13 +881,11 @@ mod tests {
     fn test_lower_reject_hypothesis_not_lowerable() {
         let ctx = test_context();
         let lowering = test_lowering_ctx();
-        let err = lower_intent(
-            &AgentIntent::RejectHypothesis,
-            &ctx,
-            &lowering,
-            ctx.ts_context,
-        )
-        .unwrap_err();
+        let intent = AgentIntent::RejectHypothesis {
+            run_id: "run-001".to_string(),
+            reason: "underperforms baseline".to_string(),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
         assert!(err.to_string().contains("not lowerable"));
     }
 
@@ -1406,6 +1495,255 @@ mod tests {
         assert!(matches!(result, GuardrailResult::Approved));
     }
 
+    fn test_account_state(total_f64: f64) -> AccountState {
+        let currency = test_currency();
+        AccountState::new(
+            AccountId::new("SIM-001"),
+            AccountType::Cash,
+            vec![AccountBalance::new(
+                Money::new(total_f64, currency),
+                Money::new(0.0, currency),
+                Money::new(total_f64, currency),
+            )],
+            vec![],
+            true,
+            UUID4::new(),
+            UnixNanos::default(),
+            UnixNanos::default(),
+            Some(currency),
+        )
+    }
+
+    #[rstest]
+    fn test_max_drawdown_approves_within_limit() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(9500.0));
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_max_drawdown_rejects_beyond_limit() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(8500.0));
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert!(reason.contains("exceeds limit"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_max_drawdown_allows_management_during_drawdown() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(5000.0));
+
+        let pause = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        assert!(matches!(
+            guardrail.evaluate(&pause, &ctx),
+            GuardrailResult::Approved
+        ));
+
+        let escalate = AgentIntent::EscalateToHuman {
+            reason: "drawdown".to_string(),
+            severity: crate::intent::EscalationSeverity::Critical,
+        };
+        assert!(matches!(
+            guardrail.evaluate(&escalate, &ctx),
+            GuardrailResult::Approved
+        ));
+    }
+
+    #[rstest]
+    fn test_max_drawdown_approves_without_account_state() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let ctx = test_context();
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    fn test_order_snapshot(strategy_id: StrategyId, ts_init: UnixNanos) -> OrderSnapshot {
+        OrderSnapshot {
+            trader_id: TraderId::from("TESTER-001"),
+            strategy_id,
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new(format!("O-{}", UUID4::new())),
+            venue_order_id: None,
+            position_id: None,
+            account_id: None,
+            last_trade_id: None,
+            order_type: OrderType::Market,
+            order_side: OrderSide::Buy,
+            quantity: Quantity::from("1.0"),
+            price: None,
+            trigger_price: None,
+            trigger_type: None,
+            limit_offset: None,
+            trailing_offset: None,
+            trailing_offset_type: None,
+            time_in_force: TimeInForce::Ioc,
+            expire_time: None,
+            filled_qty: Quantity::from("0"),
+            liquidity_side: None,
+            avg_px: None,
+            slippage: None,
+            commissions: vec![],
+            status: OrderStatus::Accepted,
+            is_post_only: false,
+            is_reduce_only: false,
+            is_quote_quantity: false,
+            display_qty: None,
+            emulation_trigger: None,
+            trigger_instrument_id: None,
+            contingency_type: None,
+            order_list_id: None,
+            linked_order_ids: None,
+            parent_order_id: None,
+            exec_algorithm_id: None,
+            exec_algorithm_params: None,
+            exec_spawn_id: None,
+            tags: None,
+            init_id: UUID4::new(),
+            ts_init,
+            ts_last: ts_init,
+        }
+    }
+
+    #[rstest]
+    fn test_order_rate_approves_under_limit() {
+        let sid = StrategyId::new("EMACross-001");
+        let guardrail = OrderRateGuardrail::new(sid, 3, 60_000_000_000);
+
+        let mut ctx = test_context();
+        let base_ns = ctx.ts_context.as_u64();
+        ctx.orders = vec![
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 30_000_000_000)),
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 20_000_000_000)),
+        ];
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_order_rate_rejects_at_limit() {
+        let sid = StrategyId::new("EMACross-001");
+        let guardrail = OrderRateGuardrail::new(sid, 2, 60_000_000_000);
+
+        let mut ctx = test_context();
+        let base_ns = ctx.ts_context.as_u64();
+        ctx.orders = vec![
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 30_000_000_000)),
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 20_000_000_000)),
+        ];
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert!(reason.contains("exceeds limit"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_order_rate_ignores_orders_outside_window() {
+        let sid = StrategyId::new("EMACross-001");
+        let guardrail = OrderRateGuardrail::new(sid, 1, 60_000_000_000);
+
+        let mut ctx = test_context();
+        let base_ns = ctx.ts_context.as_u64();
+        // Order from 2 minutes ago, outside the 60s window
+        ctx.orders = vec![test_order_snapshot(
+            sid,
+            UnixNanos::from(base_ns - 120_000_000_000),
+        )];
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_order_rate_filters_by_strategy() {
+        let sid = StrategyId::new("EMACross-001");
+        let other_sid = StrategyId::new("Momentum-002");
+        let guardrail = OrderRateGuardrail::new(sid, 1, 60_000_000_000);
+
+        let mut ctx = test_context();
+        let base_ns = ctx.ts_context.as_u64();
+        // Order belongs to a different strategy
+        ctx.orders = vec![test_order_snapshot(
+            other_sid,
+            UnixNanos::from(base_ns - 10_000_000_000),
+        )];
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_order_rate_approves_non_trading_intents() {
+        let sid = StrategyId::new("EMACross-001");
+        let guardrail = OrderRateGuardrail::new(sid, 0, 60_000_000_000);
+        let ctx = test_context();
+
+        let intent = test_run_backtest_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_order_rate_allows_cancel_during_burst() {
+        let sid = StrategyId::new("EMACross-001");
+        let guardrail = OrderRateGuardrail::new(sid, 1, 60_000_000_000);
+
+        let mut ctx = test_context();
+        let base_ns = ctx.ts_context.as_u64();
+        ctx.orders = vec![
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 10_000_000_000)),
+            test_order_snapshot(sid, UnixNanos::from(base_ns - 5_000_000_000)),
+        ];
+
+        let cancel = AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-test"),
+        };
+        assert!(matches!(
+            guardrail.evaluate(&cancel, &ctx),
+            GuardrailResult::Approved
+        ));
+
+        let cancel_all = AgentIntent::CancelAllOrders {
+            instrument_id: test_instrument_id(),
+            order_side: OrderSide::Buy,
+        };
+        assert!(matches!(
+            guardrail.evaluate(&cancel_all, &ctx),
+            GuardrailResult::Approved
+        ));
+    }
+
     #[rstest]
     fn test_pipeline_research_denied_without_capability() {
         let policy = FixedPolicy(PolicyDecision::Act(test_run_backtest_intent()));
@@ -1451,7 +1789,10 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_workflow_intent_records_lowering_failure() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::SaveCandidate));
+        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::SaveCandidate {
+            run_id: "run-001".to_string(),
+            label: "candidate".to_string(),
+        }));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let trigger = DecisionTrigger::Timer {
