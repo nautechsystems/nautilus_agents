@@ -27,19 +27,23 @@
 use nautilus_common::messages::execution::{
     CancelAllOrders as CancelAllOrdersCmd, CancelOrder as CancelOrderCmd, SubmitOrder,
 };
-use nautilus_core::{UUID4, UnixNanos};
+use nautilus_core::{Params, UUID4, UnixNanos};
 use nautilus_model::{
     enums::{OrderSide, OrderType, PositionSide, TimeInForce},
     events::{OrderInitialized, PositionSnapshot},
     identifiers::{ClientOrderId, InstrumentId, StrategyId, TraderId},
     types::Quantity,
 };
+use serde_json::json;
 
 use crate::{
     action::{ManagementCommand, ResearchCommand, RuntimeAction, TradeAction},
     context::AgentContext,
     intent::AgentIntent,
+    policy::PlannedIntent,
 };
+
+const INTENT_ID_PARAM_KEY: &str = "nautilus_agents.intent_id";
 
 /// Identifiers that intents do not carry. Supplied by the runtime
 /// when constructing the pipeline.
@@ -79,6 +83,35 @@ pub fn lower_intent(
     lowering: &LoweringContext,
     ts_init: UnixNanos,
 ) -> Result<RuntimeAction, LoweringError> {
+    lower_intent_with_id(intent, None, context, lowering, ts_init)
+}
+
+/// Translate a [`PlannedIntent`] into a [`RuntimeAction`].
+///
+/// Preserves `intent_id` as correlation metadata on lowered runtime
+/// actions and command params.
+pub fn lower_planned_intent(
+    planned_intent: &PlannedIntent,
+    context: &AgentContext,
+    lowering: &LoweringContext,
+    ts_init: UnixNanos,
+) -> Result<RuntimeAction, LoweringError> {
+    lower_intent_with_id(
+        &planned_intent.intent,
+        Some(planned_intent.intent_id),
+        context,
+        lowering,
+        ts_init,
+    )
+}
+
+fn lower_intent_with_id(
+    intent: &AgentIntent,
+    intent_id: Option<UUID4>,
+    context: &AgentContext,
+    lowering: &LoweringContext,
+    ts_init: UnixNanos,
+) -> Result<RuntimeAction, LoweringError> {
     match intent {
         AgentIntent::ReducePosition {
             instrument_id,
@@ -96,8 +129,13 @@ pub fn lower_intent(
                 true,
                 ts_init,
             );
-            let submit =
-                submit_order_cmd(lowering, &order_init, Some(position.position_id), ts_init);
+            let submit = submit_order_cmd(
+                lowering,
+                &order_init,
+                Some(position.position_id),
+                intent_id,
+                ts_init,
+            );
             Ok(RuntimeAction::Trade(Box::new(TradeAction::SubmitOrder(
                 Box::new(submit),
             ))))
@@ -118,8 +156,13 @@ pub fn lower_intent(
                 true,
                 ts_init,
             );
-            let submit =
-                submit_order_cmd(lowering, &order_init, Some(position.position_id), ts_init);
+            let submit = submit_order_cmd(
+                lowering,
+                &order_init,
+                Some(position.position_id),
+                intent_id,
+                ts_init,
+            );
             Ok(RuntimeAction::Trade(Box::new(TradeAction::SubmitOrder(
                 Box::new(submit),
             ))))
@@ -143,7 +186,7 @@ pub fn lower_intent(
                 venue_order_id,
                 command_id: UUID4::new(),
                 ts_init,
-                params: None,
+                params: command_params(intent_id),
             };
             Ok(RuntimeAction::Trade(Box::new(TradeAction::CancelOrder(
                 cmd,
@@ -162,7 +205,7 @@ pub fn lower_intent(
                 order_side: *order_side,
                 command_id: UUID4::new(),
                 ts_init,
-                params: None,
+                params: command_params(intent_id),
             };
             Ok(RuntimeAction::Trade(Box::new(
                 TradeAction::CancelAllOrders(cmd),
@@ -174,6 +217,7 @@ pub fn lower_intent(
             Ok(RuntimeAction::Management(
                 ManagementCommand::PauseStrategy {
                     strategy_id: *strategy_id,
+                    intent_id,
                 },
             ))
         }
@@ -183,6 +227,7 @@ pub fn lower_intent(
             Ok(RuntimeAction::Management(
                 ManagementCommand::ResumeStrategy {
                     strategy_id: *strategy_id,
+                    intent_id,
                 },
             ))
         }
@@ -190,6 +235,7 @@ pub fn lower_intent(
         AgentIntent::AdjustRiskLimits { params } => Ok(RuntimeAction::Management(
             ManagementCommand::AdjustRiskLimits {
                 params: params.clone(),
+                intent_id,
             },
         )),
 
@@ -197,6 +243,7 @@ pub fn lower_intent(
             ManagementCommand::EscalateToHuman {
                 reason: reason.clone(),
                 severity: *severity,
+                intent_id,
             },
         )),
 
@@ -214,11 +261,13 @@ pub fn lower_intent(
             bar_spec: bar_spec.clone(),
             start_ns: *start_ns,
             end_ns: *end_ns,
+            intent_id,
         })),
 
         AgentIntent::AbortBacktest { run_id } => {
             Ok(RuntimeAction::Research(ResearchCommand::CancelBacktest {
                 run_id: run_id.clone(),
+                intent_id,
             }))
         }
 
@@ -237,11 +286,13 @@ pub fn lower_intent(
             bar_spec: bar_spec.clone(),
             start_ns: *start_ns,
             end_ns: *end_ns,
+            intent_id,
         })),
 
         AgentIntent::CompareResults { run_ids } => {
             Ok(RuntimeAction::Research(ResearchCommand::CompareBacktests {
                 run_ids: run_ids.clone(),
+                intent_id,
             }))
         }
 
@@ -366,6 +417,7 @@ fn submit_order_cmd(
     lowering: &LoweringContext,
     order_init: &OrderInitialized,
     position_id: Option<nautilus_model::identifiers::PositionId>,
+    intent_id: Option<UUID4>,
     ts_init: UnixNanos,
 ) -> SubmitOrder {
     SubmitOrder {
@@ -377,10 +429,21 @@ fn submit_order_cmd(
         order_init: order_init.clone(),
         exec_algorithm_id: None,
         position_id,
-        params: None,
         command_id: UUID4::new(),
         ts_init,
+        params: command_params(intent_id),
     }
+}
+
+fn command_params(intent_id: Option<UUID4>) -> Option<Params> {
+    let intent_id = intent_id?;
+
+    let mut params = Params::new();
+    params.insert(
+        INTENT_ID_PARAM_KEY.to_string(),
+        json!(intent_id.to_string()),
+    );
+    Some(params)
 }
 
 fn intent_variant_name(intent: &AgentIntent) -> &'static str {

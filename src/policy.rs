@@ -20,16 +20,102 @@
 //! a [`PolicyError`]. Policy failure (panic, timeout) is distinct from
 //! a decision to not act.
 
+use std::{future::Future, pin::Pin};
+
+use nautilus_core::UUID4;
 use serde::{Deserialize, Serialize};
 
 use crate::{context::AgentContext, intent::AgentIntent};
 
-/// Guardrails only evaluate the `Act` variant.
-#[non_exhaustive]
+pub type PolicyFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<PolicyDecision, PolicyError>> + Send + 'a>>;
+
+/// Stable correlation wrapper for an intent inside an action plan.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlannedIntent {
+    pub intent_id: UUID4,
+    pub intent: AgentIntent,
+}
+
+/// Semantic equality ignores `intent_id`.
+///
+/// `intent_id` is a correlation key, not part of the intent meaning.
+/// Compare `intent_id` directly when identity matters.
+/// Do not derive `Eq` or `Hash` with this equality.
+impl PartialEq for PlannedIntent {
+    fn eq(&self, other: &Self) -> bool {
+        self.intent == other.intent
+    }
+}
+
+impl PlannedIntent {
+    #[must_use]
+    pub fn new(intent: AgentIntent) -> Self {
+        Self {
+            intent_id: UUID4::new(),
+            intent,
+        }
+    }
+}
+
+/// Ordered plan of semantic intents emitted by a policy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ActionPlanDef")]
+pub struct ActionPlan {
+    intents: Vec<PlannedIntent>,
+}
+
+impl ActionPlan {
+    #[must_use]
+    pub fn new(intents: Vec<PlannedIntent>) -> Self {
+        assert!(
+            !intents.is_empty(),
+            "action plan must contain at least one planned intent"
+        );
+        Self { intents }
+    }
+
+    #[must_use]
+    pub fn single(intent: AgentIntent) -> Self {
+        Self::new(vec![PlannedIntent::new(intent)])
+    }
+
+    #[must_use]
+    pub fn intents(&self) -> &[PlannedIntent] {
+        &self.intents
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_unchecked(intents: Vec<PlannedIntent>) -> Self {
+        Self { intents }
+    }
+}
+
+/// Guardrails only evaluate the `Execute` variant.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PolicyDecision {
-    Act(AgentIntent),
+    Execute(ActionPlan),
     NoAction,
+}
+
+#[derive(Deserialize)]
+struct ActionPlanDef {
+    intents: Vec<PlannedIntent>,
+}
+
+impl TryFrom<ActionPlanDef> for ActionPlan {
+    type Error = String;
+
+    fn try_from(value: ActionPlanDef) -> Result<Self, Self::Error> {
+        if value.intents.is_empty() {
+            return Err("action plan must contain at least one planned intent".to_string());
+        }
+
+        Ok(Self {
+            intents: value.intents,
+        })
+    }
 }
 
 /// Policy failures, not decisions. A timeout or panic is not the same
@@ -45,8 +131,8 @@ pub enum PolicyError {
 }
 
 /// Does not dictate how the LLM is called, what model is used, or how
-/// prompts are structured. Takes owned context to support remote and
-/// async policy paths.
+/// prompts are structured. The context is borrowed so remote or
+/// LLM-backed policies avoid cloning the full snapshot each cycle.
 pub trait AgentPolicy: Send + Sync {
-    fn evaluate(&self, context: AgentContext) -> Result<PolicyDecision, PolicyError>;
+    fn evaluate<'a>(&'a self, context: &'a AgentContext) -> PolicyFuture<'a>;
 }

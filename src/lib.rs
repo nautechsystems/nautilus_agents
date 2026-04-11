@@ -60,9 +60,11 @@ pub mod prelude {
             position_limit::PositionLimitGuardrail,
         },
         intent::{AgentIntent, EscalationSeverity, ExecutionConstraints},
-        lowering::{LoweringContext, LoweringError, lower_intent},
+        lowering::{LoweringContext, LoweringError, lower_intent, lower_planned_intent},
         pipeline::{DecisionPipeline, PipelineError},
-        policy::{AgentPolicy, PolicyDecision, PolicyError},
+        policy::{
+            ActionPlan, AgentPolicy, PlannedIntent, PolicyDecision, PolicyError, PolicyFuture,
+        },
         recording::{DecisionRecorder, RecordingError},
         replay::{ReplayConfig, ReplayError, ReplayResult, ReplayRunner, read_envelopes},
     };
@@ -82,6 +84,7 @@ mod tests {
         identifiers::{AccountId, ClientOrderId, InstrumentId, PositionId, StrategyId, TraderId},
         types::{AccountBalance, Currency, Money, Price, Quantity},
     };
+    use pollster::block_on;
     use rstest::rstest;
 
     use crate::{
@@ -98,11 +101,11 @@ mod tests {
             position_limit::PositionLimitGuardrail,
         },
         intent::{AgentIntent, ExecutionConstraints},
-        lowering::{LoweringContext, lower_intent},
-        pipeline::DecisionPipeline,
-        policy::{AgentPolicy, PolicyDecision, PolicyError},
+        lowering::{LoweringContext, lower_intent, lower_planned_intent},
+        pipeline::{DecisionPipeline, PipelineError},
+        policy::{ActionPlan, AgentPolicy, PlannedIntent, PolicyDecision},
         recording::DecisionRecorder,
-        replay::{ReplayConfig, ReplayRunner, read_envelopes},
+        replay::{ReplayConfig, ReplayError, ReplayResult, ReplayRunner, read_envelopes},
     };
 
     fn test_instrument_id() -> InstrumentId {
@@ -162,6 +165,35 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    fn execute_single(intent: AgentIntent) -> PolicyDecision {
+        PolicyDecision::Execute(ActionPlan::single(intent))
+    }
+
+    fn single_planned_intent(decision: &PolicyDecision) -> &PlannedIntent {
+        match decision {
+            PolicyDecision::Execute(plan) => match plan.intents() {
+                [planned_intent] => planned_intent,
+                other => panic!("expected one planned intent, got {}", other.len()),
+            },
+            PolicyDecision::NoAction => panic!("expected Execute, got NoAction"),
+        }
+    }
+
+    fn run_pipeline(
+        pipeline: &DecisionPipeline,
+        trigger: DecisionTrigger,
+        context: AgentContext,
+    ) -> Result<DecisionEnvelope, PipelineError> {
+        block_on(pipeline.run(trigger, context))
+    }
+
+    fn run_replay(
+        runner: &ReplayRunner,
+        envelopes: Vec<DecisionEnvelope>,
+    ) -> Result<Vec<ReplayResult>, ReplayError> {
+        block_on(runner.run(envelopes))
     }
 
     #[rstest]
@@ -226,18 +258,24 @@ mod tests {
 
     #[rstest]
     fn test_policy_decision_round_trip() {
-        let decision = PolicyDecision::Act(test_intent());
+        let decision = execute_single(test_intent());
         let json = serde_json::to_string(&decision).unwrap();
         let restored: PolicyDecision = serde_json::from_str(&json).unwrap();
+        let planned_intent = single_planned_intent(&restored);
 
-        match restored {
-            PolicyDecision::Act(AgentIntent::ReducePosition {
+        assert_eq!(
+            &planned_intent.intent_id,
+            &single_planned_intent(&decision).intent_id
+        );
+
+        match &planned_intent.intent {
+            AgentIntent::ReducePosition {
                 instrument_id,
                 quantity,
                 constraints,
-            }) => {
-                assert_eq!(instrument_id, test_instrument_id());
-                assert_eq!(quantity, Quantity::from("0.5"));
+            } => {
+                assert_eq!(*instrument_id, test_instrument_id());
+                assert_eq!(*quantity, Quantity::from("0.5"));
                 assert!(constraints.reduce_only);
             }
             other => panic!("unexpected variant: {other:?}"),
@@ -250,6 +288,12 @@ mod tests {
         let json = serde_json::to_string(&decision).unwrap();
         let restored: PolicyDecision = serde_json::from_str(&json).unwrap();
         assert!(matches!(restored, PolicyDecision::NoAction));
+    }
+
+    #[rstest]
+    #[should_panic(expected = "action plan must contain at least one planned intent")]
+    fn test_action_plan_new_rejects_empty_vec() {
+        let _ = ActionPlan::new(vec![]);
     }
 
     #[rstest]
@@ -270,7 +314,7 @@ mod tests {
                 instrument_id: test_instrument_id(),
             },
             context: test_context(),
-            decision: PolicyDecision::Act(test_intent()),
+            decision: execute_single(test_intent()),
             intent_guardrail: Some(GuardrailResult::Approved),
             lowering_result: Some(LoweringOutcome::Success),
             lowered_action: None,
@@ -287,7 +331,10 @@ mod tests {
         let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.schema_version, 1);
-        assert!(matches!(restored.decision, PolicyDecision::Act(_)));
+        assert_eq!(
+            single_planned_intent(&restored.decision).intent,
+            test_intent()
+        );
         assert!(matches!(
             restored.intent_guardrail,
             Some(GuardrailResult::Approved)
@@ -443,8 +490,17 @@ mod tests {
     struct FixedPolicy(PolicyDecision);
 
     impl AgentPolicy for FixedPolicy {
-        fn evaluate(&self, _context: AgentContext) -> Result<PolicyDecision, PolicyError> {
-            Ok(self.0.clone())
+        fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> crate::policy::PolicyFuture<'a> {
+            Box::pin(async move { Ok(self.0.clone()) })
+        }
+    }
+
+    struct FreshPlanPolicy(AgentIntent);
+
+    impl AgentPolicy for FreshPlanPolicy {
+        fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> crate::policy::PolicyFuture<'a> {
+            let intent = self.0.clone();
+            Box::pin(async move { Ok(execute_single(intent)) })
         }
     }
 
@@ -514,6 +570,105 @@ mod tests {
             },
             other => panic!("expected Trade, got {other:?}"),
         }
+    }
+
+    #[rstest]
+    fn test_lower_planned_intent_preserves_intent_id_in_command_params() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-789"),
+        });
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelOrder(cmd) => {
+                    let params = cmd.params.expect("missing command params");
+                    let intent_id = planned_intent.intent_id.to_string();
+                    assert_eq!(
+                        params.get_str("nautilus_agents.intent_id"),
+                        Some(intent_id.as_str())
+                    );
+                }
+                other => panic!("expected CancelOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_planned_run_backtest_preserves_intent_id() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(test_run_backtest_intent());
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest { intent_id, .. }) => {
+                assert_eq!(intent_id, Some(planned_intent.intent_id));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_planned_pause_strategy_preserves_intent_id() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        });
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::PauseStrategy { intent_id, .. }) => {
+                assert_eq!(intent_id, Some(planned_intent.intent_id));
+            }
+            other => panic!("expected Management(PauseStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_research_command_partial_eq_ignores_intent_id() {
+        let command_a = ResearchCommand::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+            intent_id: Some(UUID4::new()),
+        };
+        let command_b = ResearchCommand::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+            intent_id: Some(UUID4::new()),
+        };
+
+        assert_eq!(command_a, command_b);
+    }
+
+    #[rstest]
+    fn test_management_command_partial_eq_ignores_intent_id() {
+        let command_a = ManagementCommand::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+            intent_id: Some(UUID4::new()),
+        };
+        let command_b = ManagementCommand::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+            intent_id: Some(UUID4::new()),
+        };
+
+        assert_eq!(command_a, command_b);
     }
 
     #[rstest]
@@ -660,7 +815,7 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Research(ResearchCommand::CancelBacktest { run_id }) => {
+            RuntimeAction::Research(ResearchCommand::CancelBacktest { run_id, .. }) => {
                 assert_eq!(run_id, "run-001");
             }
             other => panic!("expected Research(CancelBacktest), got {other:?}"),
@@ -689,6 +844,7 @@ mod tests {
                 bar_spec,
                 start_ns,
                 end_ns,
+                ..
             }) => {
                 assert_eq!(instrument_id, test_instrument_id());
                 assert_eq!(catalog_path, "/data/catalog");
@@ -710,7 +866,7 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Research(ResearchCommand::CompareBacktests { run_ids }) => {
+            RuntimeAction::Research(ResearchCommand::CompareBacktests { run_ids, .. }) => {
                 assert_eq!(run_ids, vec!["run-001", "run-002"]);
             }
             other => panic!("expected Research(CompareBacktests), got {other:?}"),
@@ -794,7 +950,7 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Management(ManagementCommand::PauseStrategy { strategy_id }) => {
+            RuntimeAction::Management(ManagementCommand::PauseStrategy { strategy_id, .. }) => {
                 assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
             }
             other => panic!("expected Management(PauseStrategy), got {other:?}"),
@@ -810,7 +966,9 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Management(ManagementCommand::ResumeStrategy { strategy_id }) => {
+            RuntimeAction::Management(ManagementCommand::ResumeStrategy {
+                strategy_id, ..
+            }) => {
                 assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
             }
             other => panic!("expected Management(ResumeStrategy), got {other:?}"),
@@ -827,7 +985,10 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Management(ManagementCommand::AdjustRiskLimits { params: lowered }) => {
+            RuntimeAction::Management(ManagementCommand::AdjustRiskLimits {
+                params: lowered,
+                ..
+            }) => {
                 assert_eq!(lowered, params);
             }
             other => panic!("expected Management(AdjustRiskLimits), got {other:?}"),
@@ -846,7 +1007,11 @@ mod tests {
         };
         let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
         match action {
-            RuntimeAction::Management(ManagementCommand::EscalateToHuman { reason, severity }) => {
+            RuntimeAction::Management(ManagementCommand::EscalateToHuman {
+                reason,
+                severity,
+                ..
+            }) => {
                 assert_eq!(reason, "drawdown limit breached");
                 assert_eq!(severity, EscalationSeverity::Critical);
             }
@@ -940,7 +1105,7 @@ mod tests {
             interval_ns: 60_000_000_000,
         };
 
-        let envelope = pipeline.run(trigger, test_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
         assert!(matches!(envelope.decision, PolicyDecision::NoAction));
         assert!(envelope.intent_guardrail.is_none());
         assert!(envelope.lowered_action.is_none());
@@ -949,7 +1114,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_act_approved() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::CancelOrder {
+        let policy = FixedPolicy(execute_single(AgentIntent::CancelOrder {
             instrument_id: test_instrument_id(),
             client_order_id: ClientOrderId::new("O-123"),
         }));
@@ -965,8 +1130,8 @@ mod tests {
             .actions
             .insert(ActionCapability::ManageOrders);
 
-        let envelope = pipeline.run(trigger, ctx).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         assert!(matches!(
             envelope.intent_guardrail,
             Some(GuardrailResult::Approved)
@@ -984,7 +1149,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_intent_guardrail_rejected() {
-        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let policy = FixedPolicy(execute_single(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(RejectAllIntents(
                 "exceeds position limit".to_string(),
@@ -994,8 +1159,8 @@ mod tests {
             interval_ns: 30_000_000_000,
         };
 
-        let envelope = pipeline.run(trigger, test_context_with_position()).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         match &envelope.intent_guardrail {
             Some(GuardrailResult::Rejected { reason }) => {
                 assert_eq!(reason, "exceeds position limit");
@@ -1008,7 +1173,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_capability_denied_records_rejection() {
-        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let policy = FixedPolicy(execute_single(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let ctx = AgentContext {
@@ -1023,8 +1188,8 @@ mod tests {
             interval_ns: 60_000_000_000,
         };
 
-        let envelope = pipeline.run(trigger, ctx).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         assert!(matches!(
             envelope.intent_guardrail,
             Some(GuardrailResult::Rejected { .. })
@@ -1034,7 +1199,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_lowering_failure_records_lowering_result() {
-        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let policy = FixedPolicy(execute_single(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(ApproveAllIntents));
 
@@ -1043,8 +1208,8 @@ mod tests {
         };
         // Context has ManagePositions capability but no positions,
         // so lowering will fail with NoPosition.
-        let envelope = pipeline.run(trigger, test_context()).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         assert!(matches!(
             envelope.intent_guardrail,
             Some(GuardrailResult::Approved)
@@ -1061,7 +1226,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_round_trip_serialization() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::CancelOrder {
+        let policy = FixedPolicy(execute_single(AgentIntent::CancelOrder {
             instrument_id: test_instrument_id(),
             client_order_id: ClientOrderId::new("O-456"),
         }));
@@ -1077,13 +1242,63 @@ mod tests {
             .actions
             .insert(ActionCapability::ManageOrders);
 
-        let envelope = pipeline.run(trigger, ctx).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
         let json = serde_json::to_string(&envelope).unwrap();
         let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.schema_version, ENVELOPE_SCHEMA_VERSION);
-        assert!(matches!(restored.decision, PolicyDecision::Act(_)));
+        assert!(matches!(restored.decision, PolicyDecision::Execute(_)));
         assert!(restored.lowered_action.is_some());
+    }
+
+    #[rstest]
+    fn test_pipeline_empty_action_plan_returns_unsupported_plan_error() {
+        let policy = FixedPolicy(PolicyDecision::Execute(ActionPlan::new_unchecked(vec![])));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+
+        let err = run_pipeline(&pipeline, trigger, test_context()).unwrap_err();
+        match err {
+            PipelineError::UnsupportedPlan { message } => {
+                assert!(message.contains("at least one planned intent"));
+            }
+            other => panic!("expected UnsupportedPlan, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_action_plan_deserialize_rejects_empty_vec() {
+        let err =
+            serde_json::from_value::<ActionPlan>(serde_json::json!({ "intents": [] })).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("action plan must contain at least one planned intent")
+        );
+    }
+
+    #[rstest]
+    fn test_pipeline_multi_intent_action_plan_returns_unsupported_plan_error() {
+        let policy = FixedPolicy(PolicyDecision::Execute(ActionPlan::new(vec![
+            PlannedIntent::new(test_intent()),
+            PlannedIntent::new(AgentIntent::CancelOrder {
+                instrument_id: test_instrument_id(),
+                client_order_id: ClientOrderId::new("O-999"),
+            }),
+        ])));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+
+        let err = run_pipeline(&pipeline, trigger, test_context()).unwrap_err();
+        match err {
+            PipelineError::UnsupportedPlan { message } => {
+                assert!(message.contains("multi-intent plans"));
+            }
+            other => panic!("expected UnsupportedPlan, got {other:?}"),
+        }
     }
 
     #[rstest]
@@ -1175,7 +1390,7 @@ mod tests {
                 instrument_id: test_instrument_id(),
             },
             context: test_context(),
-            decision: PolicyDecision::Act(test_intent()),
+            decision: execute_single(test_intent()),
             intent_guardrail: Some(GuardrailResult::Approved),
             lowering_result: None,
             lowered_action: None,
@@ -1193,7 +1408,10 @@ mod tests {
         assert_eq!(restored[0].envelope_id, envelope1.envelope_id);
         assert_eq!(restored[1].envelope_id, envelope2.envelope_id);
         assert!(matches!(restored[0].decision, PolicyDecision::NoAction));
-        assert!(matches!(restored[1].decision, PolicyDecision::Act(_)));
+        assert_eq!(
+            single_planned_intent(&restored[1].decision).intent,
+            test_intent()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1219,8 +1437,8 @@ mod tests {
         let path = dir.join("decisions.jsonl");
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Record an Act envelope using a policy that acts.
-        let act_policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        // Record an Execute envelope using a policy that submits one planned intent.
+        let act_policy = FixedPolicy(execute_single(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(act_policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(ApproveAllIntents))
             .with_action_guardrail(Box::new(ApproveAllActions));
@@ -1228,8 +1446,8 @@ mod tests {
         let trigger = DecisionTrigger::MarketData {
             instrument_id: test_instrument_id(),
         };
-        let original = pipeline.run(trigger, test_context_with_position()).unwrap();
-        assert!(matches!(original.decision, PolicyDecision::Act(_)));
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
+        assert!(matches!(original.decision, PolicyDecision::Execute(_)));
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -1241,10 +1459,45 @@ mod tests {
         let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
 
         let envelopes = read_envelopes(&path).unwrap();
-        let results = runner.run(envelopes).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].decision_changed());
         assert!(results[0].summary().contains("changed"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_ignores_fresh_intent_ids_when_intent_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_intent_ids_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+
+        let original_policy = FreshPlanPolicy(test_intent());
+        let original_pipeline =
+            DecisionPipeline::new(Box::new(original_policy), test_lowering_ctx())
+                .with_intent_guardrail(Box::new(ApproveAllIntents))
+                .with_action_guardrail(Box::new(ApproveAllActions));
+        let original =
+            run_pipeline(&original_pipeline, trigger, test_context_with_position()).unwrap();
+
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&original).unwrap();
+
+        let replay_policy = FreshPlanPolicy(test_intent());
+        let replay_pipeline = DecisionPipeline::new(Box::new(replay_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].decision_changed());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1256,7 +1509,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Record an envelope approved by a permissive guardrail.
-        let policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let policy = FixedPolicy(execute_single(test_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(ApproveAllIntents))
             .with_action_guardrail(Box::new(ApproveAllActions));
@@ -1264,7 +1517,7 @@ mod tests {
         let trigger = DecisionTrigger::MarketData {
             instrument_id: test_instrument_id(),
         };
-        let original = pipeline.run(trigger, test_context_with_position()).unwrap();
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
         assert!(matches!(
             original.intent_guardrail,
             Some(GuardrailResult::Approved)
@@ -1274,13 +1527,13 @@ mod tests {
         recorder.record(&original).unwrap();
 
         // Replay with a stricter guardrail that rejects everything.
-        let replay_policy = FixedPolicy(PolicyDecision::Act(test_intent()));
+        let replay_policy = FixedPolicy(execute_single(test_intent()));
         let replay_pipeline = DecisionPipeline::new(Box::new(replay_policy), test_lowering_ctx())
             .with_intent_guardrail(Box::new(RejectAllIntents("stricter limit".to_string())));
         let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
 
         let envelopes = read_envelopes(&path).unwrap();
-        let results = runner.run(envelopes).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
         assert_eq!(results.len(), 1);
         // Original was approved, replayed is rejected: outcome changed.
         assert!(results[0].decision_changed());
@@ -1331,7 +1584,7 @@ mod tests {
             skip_no_action: true,
         };
         let runner = ReplayRunner::new(pipeline, config);
-        let results = runner.run(envelopes).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
         assert_eq!(results.len(), 0);
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1352,12 +1605,12 @@ mod tests {
             start_ns: None,
             end_ns: None,
         };
-        let policy_a = FixedPolicy(PolicyDecision::Act(intent_a));
+        let policy_a = FixedPolicy(execute_single(intent_a));
         let pipeline_a = DecisionPipeline::new(Box::new(policy_a), test_lowering_ctx());
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let original = pipeline_a.run(trigger, test_research_context()).unwrap();
+        let original = run_pipeline(&pipeline_a, trigger, test_research_context()).unwrap();
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -1371,12 +1624,12 @@ mod tests {
             start_ns: None,
             end_ns: None,
         };
-        let policy_b = FixedPolicy(PolicyDecision::Act(intent_b));
+        let policy_b = FixedPolicy(execute_single(intent_b));
         let pipeline_b = DecisionPipeline::new(Box::new(policy_b), test_lowering_ctx());
         let runner = ReplayRunner::new(pipeline_b, ReplayConfig::default());
 
         let envelopes = read_envelopes(&path).unwrap();
-        let results = runner.run(envelopes).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].decision_changed());
 
@@ -1746,14 +1999,14 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_research_denied_without_capability() {
-        let policy = FixedPolicy(PolicyDecision::Act(test_run_backtest_intent()));
+        let policy = FixedPolicy(execute_single(test_run_backtest_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
         // test_context() has no Research capability.
-        let envelope = pipeline.run(trigger, test_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
         assert!(matches!(
             envelope.intent_guardrail,
             Some(GuardrailResult::Rejected { .. })
@@ -1769,14 +2022,14 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_research_intent_lowers_successfully() {
-        let policy = FixedPolicy(PolicyDecision::Act(test_run_backtest_intent()));
+        let policy = FixedPolicy(execute_single(test_run_backtest_intent()));
         let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
 
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let envelope = pipeline.run(trigger, test_research_context()).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, test_research_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         assert!(matches!(
             envelope.lowering_result,
             Some(LoweringOutcome::Success)
@@ -1789,7 +2042,7 @@ mod tests {
 
     #[rstest]
     fn test_pipeline_workflow_intent_records_lowering_failure() {
-        let policy = FixedPolicy(PolicyDecision::Act(AgentIntent::SaveCandidate {
+        let policy = FixedPolicy(execute_single(AgentIntent::SaveCandidate {
             run_id: "run-001".to_string(),
             label: "candidate".to_string(),
         }));
@@ -1798,8 +2051,8 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let envelope = pipeline.run(trigger, test_research_context()).unwrap();
-        assert!(matches!(envelope.decision, PolicyDecision::Act(_)));
+        let envelope = run_pipeline(&pipeline, trigger, test_research_context()).unwrap();
+        assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         match &envelope.lowering_result {
             Some(LoweringOutcome::Failed { reason }) => {
                 assert!(reason.contains("not lowerable"));

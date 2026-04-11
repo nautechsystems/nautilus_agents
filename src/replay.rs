@@ -17,7 +17,7 @@
 //!
 //! Reads JSONL files produced by [`DecisionRecorder`](crate::recording::DecisionRecorder),
 //! re-evaluates them through a [`DecisionPipeline`], and compares original
-//! decisions against replayed outcomes.
+//! decisions and action plans against replayed outcomes.
 
 use std::{fmt, fs, path::Path};
 
@@ -92,10 +92,9 @@ impl ReplayResult {
     ///
     /// Compares the policy decision (including intent content), intent
     /// guardrail result, lowering outcome, lowered action, and action
-    /// guardrail result. Research commands compare the full payload
-    /// (fields are deterministic). Trade action payloads compare only
-    /// the variant discriminant because `lower_intent` generates fresh
-    /// UUIDs each run.
+    /// guardrail result. Lowered actions compare semantic payload and
+    /// ignore correlation-only fields such as generated UUIDs and
+    /// `intent_id`.
     pub fn decision_changed(&self) -> bool {
         !decisions_match(&self.original.decision, &self.replayed.decision)
             || !guardrails_match(
@@ -182,7 +181,10 @@ impl ReplayRunner {
     }
 
     /// Re-evaluate all envelopes, returning a `ReplayResult` per envelope.
-    pub fn run(&self, envelopes: Vec<DecisionEnvelope>) -> Result<Vec<ReplayResult>, ReplayError> {
+    pub async fn run(
+        &self,
+        envelopes: Vec<DecisionEnvelope>,
+    ) -> Result<Vec<ReplayResult>, ReplayError> {
         let mut results = Vec::new();
         for envelope in envelopes {
             if self.config.skip_no_action && matches!(envelope.decision, PolicyDecision::NoAction) {
@@ -190,7 +192,8 @@ impl ReplayRunner {
             }
             let replayed = self
                 .pipeline
-                .run(envelope.trigger.clone(), envelope.context.clone())?;
+                .run(envelope.trigger.clone(), envelope.context.clone())
+                .await?;
             results.push(ReplayResult {
                 original: envelope,
                 replayed,
@@ -202,8 +205,8 @@ impl ReplayRunner {
 
 /// Compares lowered actions. Trade actions use variant-discriminant
 /// comparison because `lower_intent` generates fresh UUIDs each run.
-/// Research and management commands carry deterministic fields derived
-/// from the intent, so they compare the full payload.
+/// Research and management commands ignore `intent_id` because replay
+/// treats it as correlation metadata, not semantic intent content.
 fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -275,17 +278,16 @@ fn guardrails_match(a: &Option<GuardrailResult>, b: &Option<GuardrailResult>) ->
 }
 
 fn decisions_match(a: &PolicyDecision, b: &PolicyDecision) -> bool {
-    match (a, b) {
-        (PolicyDecision::NoAction, PolicyDecision::NoAction) => true,
-        (PolicyDecision::Act(intent_a), PolicyDecision::Act(intent_b)) => intent_a == intent_b,
-        _ => false,
-    }
+    a == b
 }
 
 fn decision_detail(decision: &PolicyDecision) -> String {
     match decision {
         PolicyDecision::NoAction => "NoAction".to_string(),
-        PolicyDecision::Act(intent) => format!("Act({})", intent_variant_name(intent)),
+        PolicyDecision::Execute(plan) => match plan.intents() {
+            [planned_intent] => format!("Execute({})", intent_variant_name(&planned_intent.intent)),
+            intents => format!("Execute({} intents)", intents.len()),
+        },
     }
 }
 

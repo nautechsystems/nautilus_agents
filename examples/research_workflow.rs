@@ -26,19 +26,24 @@
 use std::collections::BTreeSet;
 
 use nautilus_agents::prelude::*;
+use pollster::block_on;
 
 struct BacktestIterationPolicy;
 
 impl AgentPolicy for BacktestIterationPolicy {
-    fn evaluate(&self, _context: AgentContext) -> Result<PolicyDecision, PolicyError> {
-        Ok(PolicyDecision::Act(AgentIntent::RunBacktest {
-            instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
-            catalog_path: "/data/catalog".to_string(),
-            data_cls: "Bar".to_string(),
-            bar_spec: Some("1-HOUR-BID".to_string()),
-            start_ns: None,
-            end_ns: None,
-        }))
+    fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> PolicyFuture<'a> {
+        Box::pin(async move {
+            Ok(PolicyDecision::Execute(ActionPlan::single(
+                AgentIntent::RunBacktest {
+                    instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
+                    catalog_path: "/data/catalog".to_string(),
+                    data_cls: "Bar".to_string(),
+                    bar_spec: Some("1-MINUTE-LAST".to_string()),
+                    start_ns: None,
+                    end_ns: None,
+                },
+            )))
+        })
     }
 }
 
@@ -79,7 +84,7 @@ fn main() {
         interval_ns: 60_000_000_000,
     };
 
-    let envelope = pipeline.run(trigger, context).unwrap();
+    let envelope = block_on(pipeline.run(trigger, context)).unwrap();
 
     println!("Decision: {:?}", envelope.decision);
     println!("Lowering: {:?}", envelope.lowering_result);

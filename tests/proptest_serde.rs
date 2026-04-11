@@ -138,6 +138,7 @@ proptest! {
             bar_spec,
             start_ns,
             end_ns,
+            intent_id: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
@@ -148,7 +149,10 @@ proptest! {
     fn prop_research_command_cancel_backtest_serde_round_trip(
         run_id in run_id_strategy(),
     ) {
-        let cmd = ResearchCommand::CancelBacktest { run_id };
+        let cmd = ResearchCommand::CancelBacktest {
+            run_id,
+            intent_id: None,
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, cmd);
@@ -158,7 +162,10 @@ proptest! {
     fn prop_research_command_compare_backtests_serde_round_trip(
         run_ids in prop::collection::vec(run_id_strategy(), 1..5),
     ) {
-        let cmd = ResearchCommand::CompareBacktests { run_ids };
+        let cmd = ResearchCommand::CompareBacktests {
+            run_ids,
+            intent_id: None,
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, cmd);
@@ -171,12 +178,18 @@ proptest! {
     ) {
         let sid = StrategyId::new(format!("{name}-{tag}"));
 
-        let pause = ManagementCommand::PauseStrategy { strategy_id: sid };
+        let pause = ManagementCommand::PauseStrategy {
+            strategy_id: sid,
+            intent_id: None,
+        };
         let json = serde_json::to_string(&pause).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, pause);
 
-        let resume = ManagementCommand::ResumeStrategy { strategy_id: sid };
+        let resume = ManagementCommand::ResumeStrategy {
+            strategy_id: sid,
+            intent_id: None,
+        };
         let json = serde_json::to_string(&resume).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, resume);
@@ -192,7 +205,11 @@ proptest! {
             1 => EscalationSeverity::Warning,
             _ => EscalationSeverity::Critical,
         };
-        let cmd = ManagementCommand::EscalateToHuman { reason, severity };
+        let cmd = ManagementCommand::EscalateToHuman {
+            reason,
+            severity,
+            intent_id: None,
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(restored, cmd);

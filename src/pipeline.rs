@@ -16,13 +16,13 @@
 //! Decision pipeline: the core loop the server calls each cycle.
 //!
 //! Orchestrates: receive trigger, call policy, check capabilities,
-//! run intent guardrail, lower intent, run action guardrail, and
-//! produce a [`DecisionEnvelope`].
+//! run intent guardrail, lower the current planned intent, run action
+//! guardrail, and produce a [`DecisionEnvelope`].
 //!
-//! Every `Act` decision produces an envelope, even when capability
-//! checks or lowering fail. The only failure that prevents an
-//! envelope is a [`PolicyError`] (the policy itself failed to
-//! produce a decision).
+//! Every single-intent `Execute` decision produces an envelope, even
+//! when capability checks or lowering fail. [`PolicyError`] and
+//! unsupported plan shapes prevent envelope creation while the v0
+//! flat envelope contract remains in place.
 
 use nautilus_core::UUID4;
 
@@ -35,17 +35,20 @@ use crate::{
     },
     guardrail::{ActionGuardrail, IntentGuardrail},
     intent::AgentIntent,
-    lowering::{LoweringContext, lower_intent},
+    lowering::{LoweringContext, lower_planned_intent},
     policy::{AgentPolicy, PolicyDecision, PolicyError},
 };
 
-/// The only failure mode is a policy error: the policy itself failed
-/// to produce a decision. Capability denials and lowering failures
-/// are recorded in the envelope so the canonical record has no gaps.
+/// Policy failures and unsupported plan shapes prevent envelope
+/// creation. Capability denials and lowering failures are recorded
+/// in the envelope so the canonical record has no gaps once the
+/// pipeline accepts the plan shape.
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
     #[error(transparent)]
     Policy(#[from] PolicyError),
+    #[error("unsupported action plan: {message}")]
+    UnsupportedPlan { message: String },
 }
 
 pub struct DecisionPipeline {
@@ -77,24 +80,28 @@ impl DecisionPipeline {
 
     /// Run one decision cycle.
     ///
-    /// Every `Act` decision produces a [`DecisionEnvelope`], including
-    /// when capability checks or lowering fail. Returns
-    /// [`PipelineError`] only when the policy itself cannot produce a
-    /// decision.
-    pub fn run(
+    /// Every single-intent `Execute` decision produces a
+    /// [`DecisionEnvelope`], including when capability checks or
+    /// lowering fail. Returns [`PipelineError`] when the policy
+    /// cannot produce a decision or when the current flat envelope
+    /// contract cannot represent the action plan.
+    pub async fn run(
         &self,
         trigger: DecisionTrigger,
         context: AgentContext,
     ) -> Result<DecisionEnvelope, PipelineError> {
         let ts_created = context.ts_context;
-        let decision = self.policy.evaluate(context.clone())?;
+        let decision = self.policy.evaluate(&context).await?;
 
         let mut intent_guardrail = None;
         let mut lowering_result = None;
         let mut lowered_action = None;
         let mut action_guardrail = None;
 
-        if let PolicyDecision::Act(ref intent) = decision {
+        if let PolicyDecision::Execute(plan) = &decision {
+            let planned_intent = single_planned_intent(plan)?;
+            let intent = &planned_intent.intent;
+
             if let Err(cap_err) = context.capabilities.check_intent(intent) {
                 intent_guardrail = Some(GuardrailResult::Rejected {
                     reason: cap_err.to_string(),
@@ -104,7 +111,8 @@ impl DecisionPipeline {
                 if matches!(intent_result, GuardrailResult::Rejected { .. }) {
                     intent_guardrail = Some(intent_result);
                 } else {
-                    match lower_intent(intent, &context, &self.lowering, ts_created) {
+                    match lower_planned_intent(planned_intent, &context, &self.lowering, ts_created)
+                    {
                         Ok(action) => {
                             let action_result = self.evaluate_action_guardrails(&action, &context);
                             intent_guardrail = Some(intent_result);
@@ -165,5 +173,19 @@ impl DecisionPipeline {
             }
         }
         GuardrailResult::Approved
+    }
+}
+
+fn single_planned_intent(
+    plan: &crate::policy::ActionPlan,
+) -> Result<&crate::policy::PlannedIntent, PipelineError> {
+    match plan.intents() {
+        [] => Err(PipelineError::UnsupportedPlan {
+            message: "action plan must contain at least one planned intent".to_string(),
+        }),
+        [planned_intent] => Ok(planned_intent),
+        _ => Err(PipelineError::UnsupportedPlan {
+            message: "multi-intent plans require per-intent envelope recording".to_string(),
+        }),
     }
 }

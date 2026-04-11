@@ -14,7 +14,7 @@ structured protocol, and every cycle is recorded for replay and audit.
 - Record every decision for reproducible analysis.
 
 > [!WARNING]
-> Early alpha. The API is not stable and may change between versions.
+> **Early alpha.** The API is not stable and may change between versions.
 > Research and risk management workflows are the current focus.
 > Execution-tier features (entry orders, limit strategies) are not yet
 > implemented.
@@ -40,11 +40,13 @@ NautilusTrader crates and reuses their real model types.
   `QuoteTick`, `Bar`, `AccountState`, `PositionSnapshot`, `OrderSnapshot`,
   and `PositionStatusReport`.
 - `AgentPolicy`: the trait a policy implements.
-- `PolicyDecision`: `Act(AgentIntent)` or `NoAction`.
+- `PolicyDecision`: `Execute(ActionPlan)` or `NoAction`.
+- `ActionPlan` and `PlannedIntent`: ordered semantic plans with stable
+  `intent_id` correlation.
 - `AgentIntent`: semantic actions with execution constraints.
 - `CapabilitySet`: explicit observation and action permissions.
 - Intent and action guardrail traits.
-- Lowering from `AgentIntent` to `RuntimeAction`.
+- Lowering from `PlannedIntent` to `RuntimeAction`.
 - `DecisionPipeline`: the policy, capability, guardrail, and lowering loop.
 - `DecisionEnvelope`: the canonical record for one decision cycle.
 - `DecisionRecorder`: line-delimited JSON recording for envelopes.
@@ -59,7 +61,7 @@ flowchart TD
     B --> C[AgentPolicy::evaluate]
     C --> D{PolicyDecision}
     D -- NoAction --> E[DecisionEnvelope]
-    D -- Act --> F[Capability check]
+    D -- Execute(ActionPlan) --> F[Capability check]
     F -- Denied --> E
     F -- Passed --> G[Intent guardrails]
     G -- Rejected --> E
@@ -141,9 +143,12 @@ Research and risk management intents are lowerable today:
   record decisions without producing runtime actions.
 - **Risk management**: `ReducePosition`, `ClosePosition`, `CancelOrder`,
   `CancelAllOrders` lower to trading commands.
-- **Pipeline**: `DecisionPipeline` runs policy evaluation, capability
-  checks, dual guardrails, lowering with explicit outcome tracking, and
-  envelope creation.
+- **Pipeline**: `DecisionPipeline` runs async policy evaluation,
+  capability checks, dual guardrails, lowering with explicit outcome
+  tracking, and envelope creation.
+- **Planning**: `PolicyDecision` carries an `ActionPlan` with stable
+  `intent_id` values. v0 currently executes one planned intent per
+  envelope while the flat envelope contract remains in place.
 - **Replay**: `DecisionRecorder` writes JSONL. The replay engine reads it
   back and compares outcomes across policy or guardrail changes.
 - **Guardrails**: `PositionLimitGuardrail` enforces per-order quantity
@@ -183,10 +188,10 @@ Near-term priorities, in order:
 1. **Research workflow depth.** Add fields to research intent variants for
    backtest configuration, parameter sets, and result handles. Connect to
    the NautilusTrader backtest engine.
-2. **Async policy contract.** Move `AgentPolicy::evaluate` to async with
-   borrowed context. Required for LLM-backed and remote policies.
-3. **Multi-intent plans.** Replace single-intent `PolicyDecision::Act`
-   with `ActionPlan` carrying multiple correlated intents.
+2. **Multi-intent recording.** Expand the flat envelope into per-intent
+   records so one decision cycle can record multiple planned intents.
+3. **Policy outcome recording.** Record policy failures in the envelope
+   without leaving audit gaps.
 4. **Execution tier.** Entry orders, limit strategies, and venue-specific
    execution. Unlocked after research and risk management are proven.
 

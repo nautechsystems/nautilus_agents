@@ -34,6 +34,7 @@ use nautilus_model::{
     identifiers::{AccountId, ClientOrderId, PositionId, StrategyId, TraderId},
     types::{Currency, Quantity},
 };
+use pollster::block_on;
 
 const MAX_POSITION_QTY: &str = "2.0";
 const REDUCE_TO_QTY: &str = "1.0";
@@ -47,33 +48,36 @@ struct ExposureMonitorPolicy {
 }
 
 impl AgentPolicy for ExposureMonitorPolicy {
-    fn evaluate(&self, context: AgentContext) -> Result<PolicyDecision, PolicyError> {
-        let position = context
-            .positions
-            .iter()
-            .find(|p| p.instrument_id == self.instrument_id && p.strategy_id == self.strategy_id);
+    fn evaluate<'a>(&'a self, context: &'a AgentContext) -> PolicyFuture<'a> {
+        Box::pin(async move {
+            let position = context.positions.iter().find(|p| {
+                p.instrument_id == self.instrument_id && p.strategy_id == self.strategy_id
+            });
 
-        let Some(pos) = position else {
-            return Ok(PolicyDecision::NoAction);
-        };
+            let Some(pos) = position else {
+                return Ok(PolicyDecision::NoAction);
+            };
 
-        if pos.quantity <= self.threshold {
-            return Ok(PolicyDecision::NoAction);
-        }
+            if pos.quantity <= self.threshold {
+                return Ok(PolicyDecision::NoAction);
+            }
 
-        let reduce_by = Quantity::from_raw(
-            pos.quantity.raw.saturating_sub(self.target.raw),
-            pos.quantity.precision,
-        );
+            let reduce_by = Quantity::from_raw(
+                pos.quantity.raw.saturating_sub(self.target.raw),
+                pos.quantity.precision,
+            );
 
-        Ok(PolicyDecision::Act(AgentIntent::ReducePosition {
-            instrument_id: self.instrument_id,
-            quantity: reduce_by,
-            constraints: ExecutionConstraints {
-                reduce_only: true,
-                ..Default::default()
-            },
-        }))
+            Ok(PolicyDecision::Execute(ActionPlan::single(
+                AgentIntent::ReducePosition {
+                    instrument_id: self.instrument_id,
+                    quantity: reduce_by,
+                    constraints: ExecutionConstraints {
+                        reduce_only: true,
+                        ..Default::default()
+                    },
+                },
+            )))
+        })
     }
 }
 
@@ -154,7 +158,7 @@ fn main() {
         description: "position quantity exceeded threshold".to_string(),
     };
 
-    let envelope = pipeline.run(trigger, context).unwrap();
+    let envelope = block_on(pipeline.run(trigger, context)).unwrap();
 
     println!("Decision:        {:?}", envelope.decision);
     println!("Intent guardrail: {:?}", envelope.intent_guardrail);
