@@ -30,22 +30,18 @@ use crate::{context::AgentContext, intent::AgentIntent};
 pub type PolicyFuture<'a> =
     Pin<Box<dyn Future<Output = Result<PolicyDecision, PolicyError>> + Send + 'a>>;
 
-/// Stable correlation wrapper for an intent inside an action plan.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Stable correlation wrapper around an [`AgentIntent`].
+///
+/// `intent_id` travels from the policy output through lowering into
+/// command params so the server can reconcile envelope decisions with
+/// downstream dispatch and execution results. Two `PlannedIntent`
+/// values with different `intent_id`s are not equal; callers that
+/// need correlation-agnostic comparison (like replay) handle it
+/// explicitly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlannedIntent {
     pub intent_id: UUID4,
     pub intent: AgentIntent,
-}
-
-/// Semantic equality ignores `intent_id`.
-///
-/// `intent_id` is a correlation key, not part of the intent meaning.
-/// Compare `intent_id` directly when identity matters.
-/// Do not derive `Eq` or `Hash` with this equality.
-impl PartialEq for PlannedIntent {
-    fn eq(&self, other: &Self) -> bool {
-        self.intent == other.intent
-    }
 }
 
 impl PlannedIntent {
@@ -58,64 +54,12 @@ impl PlannedIntent {
     }
 }
 
-/// Ordered plan of semantic intents emitted by a policy.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "ActionPlanDef")]
-pub struct ActionPlan {
-    intents: Vec<PlannedIntent>,
-}
-
-impl ActionPlan {
-    #[must_use]
-    pub fn new(intents: Vec<PlannedIntent>) -> Self {
-        assert!(
-            !intents.is_empty(),
-            "action plan must contain at least one planned intent"
-        );
-        Self { intents }
-    }
-
-    #[must_use]
-    pub fn single(intent: AgentIntent) -> Self {
-        Self::new(vec![PlannedIntent::new(intent)])
-    }
-
-    #[must_use]
-    pub fn intents(&self) -> &[PlannedIntent] {
-        &self.intents
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_unchecked(intents: Vec<PlannedIntent>) -> Self {
-        Self { intents }
-    }
-}
-
 /// Guardrails only evaluate the `Execute` variant.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PolicyDecision {
-    Execute(ActionPlan),
+    Execute(PlannedIntent),
     NoAction,
-}
-
-#[derive(Deserialize)]
-struct ActionPlanDef {
-    intents: Vec<PlannedIntent>,
-}
-
-impl TryFrom<ActionPlanDef> for ActionPlan {
-    type Error = String;
-
-    fn try_from(value: ActionPlanDef) -> Result<Self, Self::Error> {
-        if value.intents.is_empty() {
-            return Err("action plan must contain at least one planned intent".to_string());
-        }
-
-        Ok(Self {
-            intents: value.intents,
-        })
-    }
 }
 
 /// Policy failures, not decisions. A timeout or panic is not the same

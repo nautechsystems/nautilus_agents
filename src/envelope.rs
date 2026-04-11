@@ -92,8 +92,23 @@ pub enum ReconciliationOutcome {
     Pending,
 }
 
-/// Every field after `decision` is `None` for `NoAction` cycles.
-/// A guardrail rejection is a recorded outcome, not a gap in the log.
+/// Per-intent evaluation record produced by the decision pipeline.
+///
+/// Groups the capability, guardrail, and lowering results for a single
+/// [`PlannedIntent`](crate::policy::PlannedIntent). `intent_id` mirrors
+/// the planned intent's correlation key.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlannedIntentOutcome {
+    pub intent_id: UUID4,
+    pub intent_guardrail: Option<GuardrailResult>,
+    pub lowering_result: Option<LoweringOutcome>,
+    pub lowered_action: Option<RuntimeAction>,
+    pub action_guardrail: Option<GuardrailResult>,
+}
+
+/// `outcome` is `Some` iff `decision` is `Execute`, and `None` for
+/// `NoAction` cycles. A guardrail rejection is a recorded outcome,
+/// not a gap in the log.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DecisionEnvelope {
     pub envelope_id: UUID4,
@@ -101,10 +116,7 @@ pub struct DecisionEnvelope {
     pub trigger: DecisionTrigger,
     pub context: AgentContext,
     pub decision: PolicyDecision,
-    pub intent_guardrail: Option<GuardrailResult>,
-    pub lowering_result: Option<LoweringOutcome>,
-    pub lowered_action: Option<RuntimeAction>,
-    pub action_guardrail: Option<GuardrailResult>,
+    pub outcome: Option<PlannedIntentOutcome>,
     pub reconciliation: Option<ReconciliationOutcome>,
     pub ts_created: UnixNanos,
     pub ts_reconciled: Option<UnixNanos>,

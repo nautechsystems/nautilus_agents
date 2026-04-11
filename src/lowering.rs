@@ -13,11 +13,13 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! Intent lowering: translates semantic intents into runtime actions.
+//! Intent lowering: translates planned intents into runtime actions.
 //!
-//! The [`lower_intent`] function fills execution details that the intent
-//! does not carry (trader ID, strategy ID, order type, time in force),
-//! producing a concrete [`RuntimeAction`] the engine can execute.
+//! The [`lower_planned_intent`] function fills execution details that
+//! the intent does not carry (trader ID, strategy ID, order type, time
+//! in force), producing a concrete [`RuntimeAction`] the engine can
+//! execute. The planned intent's `intent_id` flows into command
+//! params as correlation metadata.
 //!
 //! Operations intents lower to trading commands. Research intents lower
 //! to [`ResearchCommand`](crate::action::ResearchCommand) variants.
@@ -70,48 +72,23 @@ pub enum LoweringError {
     NotLowerable { description: String },
 }
 
-/// Translate an [`AgentIntent`] into a [`RuntimeAction`].
-///
-/// Operations intents lower to trading commands. Research intents
-/// lower to `ResearchCommand` variants. `AdjustParameters` lowers
-/// to `RunBacktest` configuration. Workflow intents (`SaveCandidate`,
-/// `RejectHypothesis`) and strategy management intents are not
-/// lowerable.
-pub fn lower_intent(
-    intent: &AgentIntent,
-    context: &AgentContext,
-    lowering: &LoweringContext,
-    ts_init: UnixNanos,
-) -> Result<RuntimeAction, LoweringError> {
-    lower_intent_with_id(intent, None, context, lowering, ts_init)
-}
-
 /// Translate a [`PlannedIntent`] into a [`RuntimeAction`].
 ///
-/// Preserves `intent_id` as correlation metadata on lowered runtime
-/// actions and command params.
+/// Preserves the planned intent's `intent_id` as correlation metadata
+/// on lowered runtime actions and command params. Operations intents
+/// lower to trading commands. Research intents lower to
+/// `ResearchCommand` variants. `AdjustParameters` lowers to
+/// `RunBacktest` configuration. Workflow intents (`SaveCandidate`,
+/// `RejectHypothesis`) and strategy management intents are not
+/// lowerable.
 pub fn lower_planned_intent(
     planned_intent: &PlannedIntent,
     context: &AgentContext,
     lowering: &LoweringContext,
     ts_init: UnixNanos,
 ) -> Result<RuntimeAction, LoweringError> {
-    lower_intent_with_id(
-        &planned_intent.intent,
-        Some(planned_intent.intent_id),
-        context,
-        lowering,
-        ts_init,
-    )
-}
-
-fn lower_intent_with_id(
-    intent: &AgentIntent,
-    intent_id: Option<UUID4>,
-    context: &AgentContext,
-    lowering: &LoweringContext,
-    ts_init: UnixNanos,
-) -> Result<RuntimeAction, LoweringError> {
+    let intent_id = planned_intent.intent_id;
+    let intent = &planned_intent.intent;
     match intent {
         AgentIntent::ReducePosition {
             instrument_id,
@@ -186,7 +163,7 @@ fn lower_intent_with_id(
                 venue_order_id,
                 command_id: UUID4::new(),
                 ts_init,
-                params: command_params(intent_id),
+                params: Some(command_params(intent_id)),
             };
             Ok(RuntimeAction::Trade(Box::new(TradeAction::CancelOrder(
                 cmd,
@@ -205,7 +182,7 @@ fn lower_intent_with_id(
                 order_side: *order_side,
                 command_id: UUID4::new(),
                 ts_init,
-                params: command_params(intent_id),
+                params: Some(command_params(intent_id)),
             };
             Ok(RuntimeAction::Trade(Box::new(
                 TradeAction::CancelAllOrders(cmd),
@@ -417,7 +394,7 @@ fn submit_order_cmd(
     lowering: &LoweringContext,
     order_init: &OrderInitialized,
     position_id: Option<nautilus_model::identifiers::PositionId>,
-    intent_id: Option<UUID4>,
+    intent_id: UUID4,
     ts_init: UnixNanos,
 ) -> SubmitOrder {
     SubmitOrder {
@@ -431,19 +408,17 @@ fn submit_order_cmd(
         position_id,
         command_id: UUID4::new(),
         ts_init,
-        params: command_params(intent_id),
+        params: Some(command_params(intent_id)),
     }
 }
 
-fn command_params(intent_id: Option<UUID4>) -> Option<Params> {
-    let intent_id = intent_id?;
-
+fn command_params(intent_id: UUID4) -> Params {
     let mut params = Params::new();
     params.insert(
         INTENT_ID_PARAM_KEY.to_string(),
         json!(intent_id.to_string()),
     );
-    Some(params)
+    params
 }
 
 fn intent_variant_name(intent: &AgentIntent) -> &'static str {

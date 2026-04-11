@@ -67,7 +67,7 @@ impl AgentPolicy for ExposureMonitorPolicy {
                 pos.quantity.precision,
             );
 
-            Ok(PolicyDecision::Execute(ActionPlan::single(
+            Ok(PolicyDecision::Execute(PlannedIntent::new(
                 AgentIntent::ReducePosition {
                     instrument_id: self.instrument_id,
                     quantity: reduce_by,
@@ -161,15 +161,18 @@ fn main() {
     let envelope = block_on(pipeline.run(trigger, context)).unwrap();
 
     println!("Decision:        {:?}", envelope.decision);
-    println!("Intent guardrail: {:?}", envelope.intent_guardrail);
-    println!("Lowering:        {:?}", envelope.lowering_result);
 
-    match &envelope.lowered_action {
-        Some(RuntimeAction::Trade(action)) => {
-            println!("Trade action:    {action:?}");
-        }
-        other => {
-            println!("Action:          {other:?}");
+    if let Some(outcome) = &envelope.outcome {
+        println!("Intent ID:       {}", outcome.intent_id);
+        println!("Intent guardrail:{:?}", outcome.intent_guardrail);
+        println!("Lowering:        {:?}", outcome.lowering_result);
+        match &outcome.lowered_action {
+            Some(RuntimeAction::Trade(action)) => {
+                println!("Trade action:    {action:?}");
+            }
+            other => {
+                println!("Action:          {other:?}");
+            }
         }
     }
 }

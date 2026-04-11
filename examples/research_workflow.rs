@@ -33,7 +33,7 @@ struct BacktestIterationPolicy;
 impl AgentPolicy for BacktestIterationPolicy {
     fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> PolicyFuture<'a> {
         Box::pin(async move {
-            Ok(PolicyDecision::Execute(ActionPlan::single(
+            Ok(PolicyDecision::Execute(PlannedIntent::new(
                 AgentIntent::RunBacktest {
                     instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
                     catalog_path: "/data/catalog".to_string(),
@@ -87,15 +87,19 @@ fn main() {
     let envelope = block_on(pipeline.run(trigger, context)).unwrap();
 
     println!("Decision: {:?}", envelope.decision);
-    println!("Lowering: {:?}", envelope.lowering_result);
-    println!("Action:   {:?}", envelope.lowered_action);
 
-    match &envelope.lowered_action {
-        Some(RuntimeAction::Research(cmd)) => {
-            println!("Research command: {cmd:?}");
-        }
-        other => {
-            println!("Unexpected action: {other:?}");
+    if let Some(outcome) = &envelope.outcome {
+        println!("Intent ID: {}", outcome.intent_id);
+        println!("Lowering:  {:?}", outcome.lowering_result);
+        println!("Action:    {:?}", outcome.lowered_action);
+
+        match &outcome.lowered_action {
+            Some(RuntimeAction::Research(cmd)) => {
+                println!("Research command: {cmd:?}");
+            }
+            other => {
+                println!("Unexpected action: {other:?}");
+            }
         }
     }
 }

@@ -17,16 +17,19 @@
 //!
 //! Reads JSONL files produced by [`DecisionRecorder`](crate::recording::DecisionRecorder),
 //! re-evaluates them through a [`DecisionPipeline`], and compares original
-//! decisions and action plans against replayed outcomes.
+//! decisions and outcomes against replayed outcomes.
 
 use std::{fmt, fs, path::Path};
 
 use crate::{
     action::{ManagementCommand, ResearchCommand, RuntimeAction},
-    envelope::{DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome},
+    envelope::{
+        DecisionEnvelope, ENVELOPE_SCHEMA_VERSION, GuardrailResult, LoweringOutcome,
+        PlannedIntentOutcome,
+    },
     intent::AgentIntent,
     pipeline::{DecisionPipeline, PipelineError},
-    policy::PolicyDecision,
+    policy::{PlannedIntent, PolicyDecision},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -90,26 +93,15 @@ pub struct ReplayResult {
 impl ReplayResult {
     /// Returns `true` when the replayed outcome differs from the original.
     ///
-    /// Compares the policy decision (including intent content), intent
-    /// guardrail result, lowering outcome, lowered action, and action
-    /// guardrail result. Lowered actions compare semantic payload and
-    /// ignore correlation-only fields such as generated UUIDs and
+    /// Compares the policy decision and the per-intent outcome.
+    /// Replay mints a fresh `intent_id` each run, so `PlannedIntent`
+    /// equality ignores `intent_id`; only semantic identity matters.
+    /// Lowered actions compare semantic payload and ignore
+    /// correlation-only fields such as generated UUIDs and
     /// `intent_id`.
     pub fn decision_changed(&self) -> bool {
         !decisions_match(&self.original.decision, &self.replayed.decision)
-            || !guardrails_match(
-                &self.original.intent_guardrail,
-                &self.replayed.intent_guardrail,
-            )
-            || !lowering_outcomes_match(
-                &self.original.lowering_result,
-                &self.replayed.lowering_result,
-            )
-            || !lowered_actions_match(&self.original.lowered_action, &self.replayed.lowered_action)
-            || !guardrails_match(
-                &self.original.action_guardrail,
-                &self.replayed.action_guardrail,
-            )
+            || !outcomes_match(&self.original.outcome, &self.replayed.outcome)
     }
 
     /// One-line summary of the comparison.
@@ -125,37 +117,19 @@ impl ReplayResult {
             return format!("envelope {id}: decision changed from {from} to {to}");
         }
 
-        if !guardrails_match(
-            &self.original.intent_guardrail,
-            &self.replayed.intent_guardrail,
-        ) {
-            let from = guardrail_label(&self.original.intent_guardrail);
-            let to = guardrail_label(&self.replayed.intent_guardrail);
-            return format!("envelope {id}: intent guardrail changed from {from} to {to}");
-        }
-
-        if !lowering_outcomes_match(
-            &self.original.lowering_result,
-            &self.replayed.lowering_result,
-        ) {
-            let from = lowering_label(&self.original.lowering_result);
-            let to = lowering_label(&self.replayed.lowering_result);
-            return format!("envelope {id}: lowering changed from {from} to {to}");
-        }
-
-        if !lowered_actions_match(&self.original.lowered_action, &self.replayed.lowered_action) {
-            let from = action_label(&self.original.lowered_action);
-            let to = action_label(&self.replayed.lowered_action);
-            return format!("envelope {id}: lowered action changed from {from} to {to}");
-        }
-
-        if !guardrails_match(
-            &self.original.action_guardrail,
-            &self.replayed.action_guardrail,
-        ) {
-            let from = guardrail_label(&self.original.action_guardrail);
-            let to = guardrail_label(&self.replayed.action_guardrail);
-            return format!("envelope {id}: action guardrail changed from {from} to {to}");
+        match (&self.original.outcome, &self.replayed.outcome) {
+            (Some(original), Some(replayed)) => {
+                if let Some(detail) = outcome_diff_summary(original, replayed) {
+                    return format!("envelope {id}: {detail}");
+                }
+            }
+            (None, None) => {}
+            (Some(_), None) => {
+                return format!("envelope {id}: outcome present originally, absent on replay");
+            }
+            (None, Some(_)) => {
+                return format!("envelope {id}: outcome absent originally, present on replay");
+            }
         }
 
         let label = decision_detail(&self.original.decision);
@@ -203,18 +177,169 @@ impl ReplayRunner {
     }
 }
 
-/// Compares lowered actions. Trade actions use variant-discriminant
-/// comparison because `lower_intent` generates fresh UUIDs each run.
-/// Research and management commands ignore `intent_id` because replay
-/// treats it as correlation metadata, not semantic intent content.
+fn outcomes_match(a: &Option<PlannedIntentOutcome>, b: &Option<PlannedIntentOutcome>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(original), Some(replayed)) => outcome_matches(original, replayed),
+        _ => false,
+    }
+}
+
+fn outcome_matches(a: &PlannedIntentOutcome, b: &PlannedIntentOutcome) -> bool {
+    guardrails_match(&a.intent_guardrail, &b.intent_guardrail)
+        && lowering_outcomes_match(&a.lowering_result, &b.lowering_result)
+        && lowered_actions_match(&a.lowered_action, &b.lowered_action)
+        && guardrails_match(&a.action_guardrail, &b.action_guardrail)
+}
+
+fn outcome_diff_summary(
+    original: &PlannedIntentOutcome,
+    replayed: &PlannedIntentOutcome,
+) -> Option<String> {
+    if !guardrails_match(&original.intent_guardrail, &replayed.intent_guardrail) {
+        let from = guardrail_label(&original.intent_guardrail);
+        let to = guardrail_label(&replayed.intent_guardrail);
+        return Some(format!("intent guardrail changed from {from} to {to}"));
+    }
+
+    if !lowering_outcomes_match(&original.lowering_result, &replayed.lowering_result) {
+        let from = lowering_label(&original.lowering_result);
+        let to = lowering_label(&replayed.lowering_result);
+        return Some(format!("lowering changed from {from} to {to}"));
+    }
+
+    if !lowered_actions_match(&original.lowered_action, &replayed.lowered_action) {
+        let from = action_label(&original.lowered_action);
+        let to = action_label(&replayed.lowered_action);
+        return Some(format!("lowered action changed from {from} to {to}"));
+    }
+
+    if !guardrails_match(&original.action_guardrail, &replayed.action_guardrail) {
+        let from = guardrail_label(&original.action_guardrail);
+        let to = guardrail_label(&replayed.action_guardrail);
+        return Some(format!("action guardrail changed from {from} to {to}"));
+    }
+
+    None
+}
+
+/// Compares lowered actions, ignoring fields that differ between runs
+/// by construction. Trade actions use variant-discriminant comparison
+/// because `lower_planned_intent` generates fresh UUIDs for the
+/// nautilus `command_id` each run. Research and management commands
+/// compare every semantic field except `intent_id`, which is
+/// correlation metadata minted fresh on each replay.
 fn lowered_actions_match(a: &Option<RuntimeAction>, b: &Option<RuntimeAction>) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => a == b,
-        (Some(RuntimeAction::Management(a)), Some(RuntimeAction::Management(b))) => a == b,
+        (Some(RuntimeAction::Research(a)), Some(RuntimeAction::Research(b))) => {
+            research_commands_match(a, b)
+        }
+        (Some(RuntimeAction::Management(a)), Some(RuntimeAction::Management(b))) => {
+            management_commands_match(a, b)
+        }
         (Some(RuntimeAction::Trade(a)), Some(RuntimeAction::Trade(b))) => {
             std::mem::discriminant(a.as_ref()) == std::mem::discriminant(b.as_ref())
         }
+        _ => false,
+    }
+}
+
+fn research_commands_match(a: &ResearchCommand, b: &ResearchCommand) -> bool {
+    match (a, b) {
+        (
+            ResearchCommand::RunBacktest {
+                instrument_id: instrument_a,
+                catalog_path: catalog_a,
+                data_cls: data_cls_a,
+                bar_spec: bar_spec_a,
+                start_ns: start_a,
+                end_ns: end_a,
+                ..
+            },
+            ResearchCommand::RunBacktest {
+                instrument_id: instrument_b,
+                catalog_path: catalog_b,
+                data_cls: data_cls_b,
+                bar_spec: bar_spec_b,
+                start_ns: start_b,
+                end_ns: end_b,
+                ..
+            },
+        ) => {
+            instrument_a == instrument_b
+                && catalog_a == catalog_b
+                && data_cls_a == data_cls_b
+                && bar_spec_a == bar_spec_b
+                && start_a == start_b
+                && end_a == end_b
+        }
+        (
+            ResearchCommand::CancelBacktest { run_id: run_a, .. },
+            ResearchCommand::CancelBacktest { run_id: run_b, .. },
+        ) => run_a == run_b,
+        (
+            ResearchCommand::GetBacktestStatus { run_id: run_a, .. },
+            ResearchCommand::GetBacktestStatus { run_id: run_b, .. },
+        ) => run_a == run_b,
+        (
+            ResearchCommand::GetBacktestResult { run_id: run_a, .. },
+            ResearchCommand::GetBacktestResult { run_id: run_b, .. },
+        ) => run_a == run_b,
+        (
+            ResearchCommand::CompareBacktests {
+                run_ids: run_ids_a, ..
+            },
+            ResearchCommand::CompareBacktests {
+                run_ids: run_ids_b, ..
+            },
+        ) => run_ids_a == run_ids_b,
+        _ => false,
+    }
+}
+
+fn management_commands_match(a: &ManagementCommand, b: &ManagementCommand) -> bool {
+    match (a, b) {
+        (
+            ManagementCommand::PauseStrategy {
+                strategy_id: strategy_a,
+                ..
+            },
+            ManagementCommand::PauseStrategy {
+                strategy_id: strategy_b,
+                ..
+            },
+        ) => strategy_a == strategy_b,
+        (
+            ManagementCommand::ResumeStrategy {
+                strategy_id: strategy_a,
+                ..
+            },
+            ManagementCommand::ResumeStrategy {
+                strategy_id: strategy_b,
+                ..
+            },
+        ) => strategy_a == strategy_b,
+        (
+            ManagementCommand::AdjustRiskLimits {
+                params: params_a, ..
+            },
+            ManagementCommand::AdjustRiskLimits {
+                params: params_b, ..
+            },
+        ) => params_a == params_b,
+        (
+            ManagementCommand::EscalateToHuman {
+                reason: reason_a,
+                severity: severity_a,
+                ..
+            },
+            ManagementCommand::EscalateToHuman {
+                reason: reason_b,
+                severity: severity_b,
+                ..
+            },
+        ) => reason_a == reason_b && severity_a == severity_b,
         _ => false,
     }
 }
@@ -278,16 +403,23 @@ fn guardrails_match(a: &Option<GuardrailResult>, b: &Option<GuardrailResult>) ->
 }
 
 fn decisions_match(a: &PolicyDecision, b: &PolicyDecision) -> bool {
-    a == b
+    match (a, b) {
+        (PolicyDecision::NoAction, PolicyDecision::NoAction) => true,
+        (PolicyDecision::Execute(pa), PolicyDecision::Execute(pb)) => planned_intents_match(pa, pb),
+        _ => false,
+    }
+}
+
+fn planned_intents_match(a: &PlannedIntent, b: &PlannedIntent) -> bool {
+    a.intent == b.intent
 }
 
 fn decision_detail(decision: &PolicyDecision) -> String {
     match decision {
         PolicyDecision::NoAction => "NoAction".to_string(),
-        PolicyDecision::Execute(plan) => match plan.intents() {
-            [planned_intent] => format!("Execute({})", intent_variant_name(&planned_intent.intent)),
-            intents => format!("Execute({} intents)", intents.len()),
-        },
+        PolicyDecision::Execute(planned_intent) => {
+            format!("Execute({})", intent_variant_name(&planned_intent.intent))
+        }
     }
 }
 

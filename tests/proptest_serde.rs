@@ -19,7 +19,7 @@ use nautilus_agents::{
     action::{ManagementCommand, ResearchCommand},
     intent::{AgentIntent, EscalationSeverity},
 };
-use nautilus_core::UnixNanos;
+use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::identifiers::{InstrumentId, StrategyId};
 use proptest::prelude::*;
 
@@ -138,7 +138,7 @@ proptest! {
             bar_spec,
             start_ns,
             end_ns,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
@@ -151,7 +151,7 @@ proptest! {
     ) {
         let cmd = ResearchCommand::CancelBacktest {
             run_id,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
@@ -164,7 +164,7 @@ proptest! {
     ) {
         let cmd = ResearchCommand::CompareBacktests {
             run_ids,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ResearchCommand = serde_json::from_str(&json).unwrap();
@@ -180,7 +180,7 @@ proptest! {
 
         let pause = ManagementCommand::PauseStrategy {
             strategy_id: sid,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&pause).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
@@ -188,7 +188,7 @@ proptest! {
 
         let resume = ManagementCommand::ResumeStrategy {
             strategy_id: sid,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&resume).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();
@@ -208,7 +208,7 @@ proptest! {
         let cmd = ManagementCommand::EscalateToHuman {
             reason,
             severity,
-            intent_id: None,
+            intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let restored: ManagementCommand = serde_json::from_str(&json).unwrap();

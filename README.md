@@ -40,15 +40,16 @@ NautilusTrader crates and reuses their real model types.
   `QuoteTick`, `Bar`, `AccountState`, `PositionSnapshot`, `OrderSnapshot`,
   and `PositionStatusReport`.
 - `AgentPolicy`: the trait a policy implements.
-- `PolicyDecision`: `Execute(ActionPlan)` or `NoAction`.
-- `ActionPlan` and `PlannedIntent`: ordered semantic plans with stable
-  `intent_id` correlation.
+- `PolicyDecision`: `Execute(PlannedIntent)` or `NoAction`.
+- `PlannedIntent`: stable `intent_id` correlation wrapper around an
+  `AgentIntent`.
 - `AgentIntent`: semantic actions with execution constraints.
 - `CapabilitySet`: explicit observation and action permissions.
 - Intent and action guardrail traits.
 - Lowering from `PlannedIntent` to `RuntimeAction`.
 - `DecisionPipeline`: the policy, capability, guardrail, and lowering loop.
-- `DecisionEnvelope`: the canonical record for one decision cycle.
+- `DecisionEnvelope`: the canonical record for one decision cycle, with
+  an optional `PlannedIntentOutcome` for the planned intent.
 - `DecisionRecorder`: line-delimited JSON recording for envelopes.
 
 ## How the pieces fit together
@@ -61,7 +62,7 @@ flowchart TD
     B --> C[AgentPolicy::evaluate]
     C --> D{PolicyDecision}
     D -- NoAction --> E[DecisionEnvelope]
-    D -- Execute(ActionPlan) --> F[Capability check]
+    D -- Execute(PlannedIntent) --> F[Capability check]
     F -- Denied --> E
     F -- Passed --> G[Intent guardrails]
     G -- Rejected --> E
@@ -78,7 +79,7 @@ flowchart TD
 - An LLM runtime, agent harness, or prompt framework.
 - A chat UI or Telegram-style control surface.
 - The live MCP or axum server.
-- Broker IDs, venue credentials, or hosted execution infrastructure.
+- Venue credentials or hosted execution infrastructure.
 - Hosted replay storage, dashboards, or fleet orchestration.
 - RBAC, approvals, or team workflow services.
 
@@ -116,8 +117,9 @@ rejects combinations it cannot safely produce. The same separation
 compilers use between high-level IR and machine code.
 
 **Canonical decision record.** Every decision cycle produces a
-`DecisionEnvelope` containing the trigger, context, decision, guardrail
-outcomes, lowering result, and reconciliation. One record per cycle,
+`DecisionEnvelope` containing the trigger, context, decision, and a
+`PlannedIntentOutcome` for the planned intent (capability check,
+guardrail results, lowering, lowered action). One record per cycle,
 no gaps: the envelope is the single source of truth for replay and
 audit.
 
@@ -146,9 +148,10 @@ Research and risk management intents are lowerable today:
 - **Pipeline**: `DecisionPipeline` runs async policy evaluation,
   capability checks, dual guardrails, lowering with explicit outcome
   tracking, and envelope creation.
-- **Planning**: `PolicyDecision` carries an `ActionPlan` with stable
-  `intent_id` values. v0 currently executes one planned intent per
-  envelope while the flat envelope contract remains in place.
+- **Planning**: `PolicyDecision::Execute` carries a single
+  `PlannedIntent` with a stable `intent_id`. The envelope records one
+  `PlannedIntentOutcome` for that intent. Multi-intent plans are not
+  part of the current protocol.
 - **Replay**: `DecisionRecorder` writes JSONL. The replay engine reads it
   back and compares outcomes across policy or guardrail changes.
 - **Guardrails**: `PositionLimitGuardrail` enforces per-order quantity
@@ -188,12 +191,17 @@ Near-term priorities, in order:
 1. **Research workflow depth.** Add fields to research intent variants for
    backtest configuration, parameter sets, and result handles. Connect to
    the NautilusTrader backtest engine.
-2. **Multi-intent recording.** Expand the flat envelope into per-intent
-   records so one decision cycle can record multiple planned intents.
-3. **Policy outcome recording.** Record policy failures in the envelope
+2. **Policy outcome recording.** Record policy failures in the envelope
    without leaving audit gaps.
-4. **Execution tier.** Entry orders, limit strategies, and venue-specific
+3. **Execution tier.** Entry orders, limit strategies, and venue-specific
    execution. Unlocked after research and risk management are proven.
+
+Multi-intent plans are deliberately out of scope. A policy emits one
+`PlannedIntent` per cycle; a controller that needs multiple correlated
+actions should run multiple cycles. Revisiting multi-intent would
+require forward-simulating position and order state between intents
+so stateful guardrails and lowering see the effective snapshot, which
+is a larger design commitment than the current protocol is ready for.
 
 Execution-tier features are intentionally deferred. The protocol earns
 trust through research and defensive operations first.
