@@ -61,7 +61,7 @@ pub mod prelude {
         },
         intent::{AgentIntent, EscalationSeverity, ExecutionConstraints},
         lowering::{LoweringContext, LoweringError, lower_planned_intent},
-        pipeline::{DecisionPipeline, PipelineError},
+        pipeline::DecisionPipeline,
         policy::{AgentPolicy, PlannedIntent, PolicyDecision, PolicyError, PolicyFuture},
         recording::{DecisionRecorder, RecordingError},
         replay::{ReplayConfig, ReplayError, ReplayResult, ReplayRunner, read_envelopes},
@@ -100,8 +100,8 @@ mod tests {
         },
         intent::{AgentIntent, ExecutionConstraints},
         lowering::{LoweringContext, lower_planned_intent},
-        pipeline::{DecisionPipeline, PipelineError},
-        policy::{AgentPolicy, PlannedIntent, PolicyDecision},
+        pipeline::DecisionPipeline,
+        policy::{AgentPolicy, PlannedIntent, PolicyDecision, PolicyError},
         recording::DecisionRecorder,
         replay::{ReplayConfig, ReplayError, ReplayResult, ReplayRunner, read_envelopes},
     };
@@ -172,7 +172,7 @@ mod tests {
     fn planned_intent(decision: &PolicyDecision) -> &PlannedIntent {
         match decision {
             PolicyDecision::Execute(planned_intent) => planned_intent,
-            PolicyDecision::NoAction => panic!("expected Execute, got NoAction"),
+            other => panic!("expected Execute, got {other:?}"),
         }
     }
 
@@ -194,7 +194,7 @@ mod tests {
         pipeline: &DecisionPipeline,
         trigger: DecisionTrigger,
         context: AgentContext,
-    ) -> Result<DecisionEnvelope, PipelineError> {
+    ) -> DecisionEnvelope {
         block_on(pipeline.run(trigger, context))
     }
 
@@ -295,6 +295,15 @@ mod tests {
         let json = serde_json::to_string(&decision).unwrap();
         let restored: PolicyDecision = serde_json::from_str(&json).unwrap();
         assert!(matches!(restored, PolicyDecision::NoAction));
+    }
+
+    #[rstest]
+    fn test_policy_decision_execute_constructs_execute_variant() {
+        let intent = test_intent();
+        match PolicyDecision::execute(intent.clone()) {
+            PolicyDecision::Execute(planned) => assert_eq!(planned.intent, intent),
+            other => panic!("expected Execute, got {other:?}"),
+        }
     }
 
     #[rstest]
@@ -527,6 +536,25 @@ mod tests {
     impl ActionGuardrail for ApproveAllActions {
         fn evaluate(&self, _action: &RuntimeAction, _context: &AgentContext) -> GuardrailResult {
             GuardrailResult::Approved
+        }
+    }
+
+    struct RejectAllActions(String);
+
+    impl ActionGuardrail for RejectAllActions {
+        fn evaluate(&self, _action: &RuntimeAction, _context: &AgentContext) -> GuardrailResult {
+            GuardrailResult::Rejected {
+                reason: self.0.clone(),
+            }
+        }
+    }
+
+    struct FailingPolicy(PolicyError);
+
+    impl AgentPolicy for FailingPolicy {
+        fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> crate::policy::PolicyFuture<'a> {
+            let e = self.0.clone();
+            Box::pin(async move { Err(e) })
         }
     }
 
@@ -1069,7 +1097,7 @@ mod tests {
             interval_ns: 60_000_000_000,
         };
 
-        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context());
         assert!(matches!(envelope.decision, PolicyDecision::NoAction));
         assert!(envelope.outcome.is_none());
     }
@@ -1092,7 +1120,7 @@ mod tests {
             .actions
             .insert(ActionCapability::ManageOrders);
 
-        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, ctx);
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
@@ -1122,7 +1150,7 @@ mod tests {
             interval_ns: 30_000_000_000,
         };
 
-        let envelope = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context_with_position());
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         match &outcome.intent_guardrail {
@@ -1152,7 +1180,7 @@ mod tests {
             interval_ns: 60_000_000_000,
         };
 
-        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, ctx);
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
@@ -1173,7 +1201,7 @@ mod tests {
         };
         // Context has ManagePositions capability but no positions,
         // so lowering will fail with NoPosition.
-        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context());
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
@@ -1188,6 +1216,63 @@ mod tests {
         }
         assert!(outcome.lowered_action.is_none());
         assert!(outcome.action_guardrail.is_none());
+    }
+
+    #[rstest]
+    fn test_pipeline_action_guardrail_rejection_is_recorded() {
+        let policy = FixedPolicy(execute(AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-777"),
+        }));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(RejectAllActions(
+                "venue circuit breaker open".to_string(),
+            )));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let mut ctx = test_context_with_position();
+        ctx.capabilities
+            .actions
+            .insert(ActionCapability::ManageOrders);
+
+        let envelope = run_pipeline(&pipeline, trigger, ctx);
+        let outcome = envelope.outcome.as_ref().expect("expected outcome");
+        assert!(matches!(
+            outcome.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(matches!(
+            outcome.lowering_result,
+            Some(LoweringOutcome::Success)
+        ));
+        assert!(outcome.lowered_action.is_some());
+        match &outcome.action_guardrail {
+            Some(GuardrailResult::Rejected { reason }) => {
+                assert_eq!(reason, "venue circuit breaker open");
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_pipeline_policy_error_is_recorded_as_failed_decision() {
+        let policy = FailingPolicy(PolicyError::Timeout { timeout_ms: 250 });
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+
+        let envelope = run_pipeline(&pipeline, trigger, test_context());
+        match &envelope.decision {
+            PolicyDecision::Failed(PolicyError::Timeout { timeout_ms }) => {
+                assert_eq!(*timeout_ms, 250);
+            }
+            other => panic!("expected Failed(Timeout), got {other:?}"),
+        }
+        assert!(envelope.outcome.is_none());
     }
 
     #[rstest]
@@ -1208,7 +1293,7 @@ mod tests {
             .actions
             .insert(ActionCapability::ManageOrders);
 
-        let envelope = run_pipeline(&pipeline, trigger, ctx).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, ctx);
         let json = serde_json::to_string(&envelope).unwrap();
         let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
 
@@ -1327,6 +1412,44 @@ mod tests {
     }
 
     #[rstest]
+    fn test_record_then_read_failed_envelope() {
+        let dir = std::env::temp_dir().join(format!("nautilus_failed_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::Failed(PolicyError::Internal {
+                message: "downstream LLM rejected request".to_string(),
+            }),
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&envelope).unwrap();
+
+        let restored = read_envelopes(&path).unwrap();
+        assert_eq!(restored.len(), 1);
+        match &restored[0].decision {
+            PolicyDecision::Failed(PolicyError::Internal { message }) => {
+                assert_eq!(message, "downstream LLM rejected request");
+            }
+            other => panic!("expected Failed(Internal), got {other:?}"),
+        }
+        assert!(restored[0].outcome.is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
     fn test_read_envelopes_malformed_line() {
         let dir = std::env::temp_dir().join(format!("nautilus_replay_bad_{}", UUID4::new()));
         let path = dir.join("decisions.jsonl");
@@ -1356,7 +1479,7 @@ mod tests {
         let trigger = DecisionTrigger::MarketData {
             instrument_id: test_instrument_id(),
         };
-        let original = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position());
         assert!(matches!(original.decision, PolicyDecision::Execute(_)));
 
         let recorder = DecisionRecorder::new(&path);
@@ -1392,8 +1515,7 @@ mod tests {
             DecisionPipeline::new(Box::new(original_policy), test_lowering_ctx())
                 .with_intent_guardrail(Box::new(ApproveAllIntents))
                 .with_action_guardrail(Box::new(ApproveAllActions));
-        let original =
-            run_pipeline(&original_pipeline, trigger, test_context_with_position()).unwrap();
+        let original = run_pipeline(&original_pipeline, trigger, test_context_with_position());
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -1427,7 +1549,7 @@ mod tests {
         let trigger = DecisionTrigger::MarketData {
             instrument_id: test_instrument_id(),
         };
-        let original = run_pipeline(&pipeline, trigger, test_context_with_position()).unwrap();
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position());
         let original_outcome_approved = original.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
             original_outcome_approved.intent_guardrail,
@@ -1509,6 +1631,71 @@ mod tests {
     }
 
     #[rstest]
+    fn test_replay_noaction_replayed_as_noaction_is_unchanged() {
+        let dir =
+            std::env::temp_dir().join(format!("nautilus_replay_noaction_eq_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let no_action_envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+        let recorder = DecisionRecorder::new(&path);
+        recorder.record(&no_action_envelope).unwrap();
+
+        // Replay with a NoAction policy and no skip; comparison must match.
+        let policy = FixedPolicy(PolicyDecision::NoAction);
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let runner = ReplayRunner::new(pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_detects_failed_error_change() {
+        let build = |error: PolicyError| DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::Failed(error),
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let same = ReplayResult {
+            original: build(PolicyError::Timeout { timeout_ms: 100 }),
+            replayed: build(PolicyError::Timeout { timeout_ms: 100 }),
+        };
+        assert!(!same.decision_changed());
+
+        let different = ReplayResult {
+            original: build(PolicyError::Timeout { timeout_ms: 100 }),
+            replayed: build(PolicyError::Timeout { timeout_ms: 200 }),
+        };
+        assert!(different.decision_changed());
+    }
+
+    #[rstest]
     fn test_replay_detects_research_payload_change() {
         let dir = std::env::temp_dir().join(format!("nautilus_replay_research_{}", UUID4::new()));
         let path = dir.join("decisions.jsonl");
@@ -1528,7 +1715,7 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let original = run_pipeline(&pipeline_a, trigger, test_research_context()).unwrap();
+        let original = run_pipeline(&pipeline_a, trigger, test_research_context());
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -1579,7 +1766,7 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let original = run_pipeline(&pipeline_a, trigger, ctx).unwrap();
+        let original = run_pipeline(&pipeline_a, trigger, ctx);
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -1643,7 +1830,7 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let original = run_pipeline(&pipeline_a, trigger, ctx.clone()).unwrap();
+        let original = run_pipeline(&pipeline_a, trigger, ctx.clone());
 
         let recorder = DecisionRecorder::new(&path);
         recorder.record(&original).unwrap();
@@ -2046,7 +2233,7 @@ mod tests {
             interval_ns: 60_000_000_000,
         };
         // test_context() has no Research capability.
-        let envelope = run_pipeline(&pipeline, trigger, test_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_context());
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
             outcome.intent_guardrail,
@@ -2069,7 +2256,7 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let envelope = run_pipeline(&pipeline, trigger, test_research_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_research_context());
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         assert!(matches!(
@@ -2093,7 +2280,7 @@ mod tests {
         let trigger = DecisionTrigger::Timer {
             interval_ns: 60_000_000_000,
         };
-        let envelope = run_pipeline(&pipeline, trigger, test_research_context()).unwrap();
+        let envelope = run_pipeline(&pipeline, trigger, test_research_context());
         assert!(matches!(envelope.decision, PolicyDecision::Execute(_)));
         let outcome = envelope.outcome.as_ref().expect("expected outcome");
         match &outcome.lowering_result {

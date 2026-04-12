@@ -67,16 +67,14 @@ impl AgentPolicy for ExposureMonitorPolicy {
                 pos.quantity.precision,
             );
 
-            Ok(PolicyDecision::Execute(PlannedIntent::new(
-                AgentIntent::ReducePosition {
-                    instrument_id: self.instrument_id,
-                    quantity: reduce_by,
-                    constraints: ExecutionConstraints {
-                        reduce_only: true,
-                        ..Default::default()
-                    },
+            Ok(PolicyDecision::execute(AgentIntent::ReducePosition {
+                instrument_id: self.instrument_id,
+                quantity: reduce_by,
+                constraints: ExecutionConstraints {
+                    reduce_only: true,
+                    ..Default::default()
                 },
-            )))
+            }))
         })
     }
 }
@@ -158,7 +156,7 @@ fn main() {
         description: "position quantity exceeded threshold".to_string(),
     };
 
-    let envelope = block_on(pipeline.run(trigger, context)).unwrap();
+    let envelope = block_on(pipeline.run(trigger, context));
 
     println!("Decision:        {:?}", envelope.decision);
 

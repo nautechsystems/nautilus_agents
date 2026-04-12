@@ -55,16 +55,38 @@ impl PlannedIntent {
 }
 
 /// Guardrails only evaluate the `Execute` variant.
+///
+/// `Failed` records a policy error inline in the decision so every
+/// cycle produces a self-contained audit record. A `Failed` envelope
+/// has `outcome: None` because there is no planned intent to evaluate.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PolicyDecision {
     Execute(PlannedIntent),
     NoAction,
+    Failed(PolicyError),
+}
+
+impl PolicyDecision {
+    /// Shorthand for constructing `Execute` from an [`AgentIntent`]
+    /// with a fresh `intent_id`.
+    #[must_use]
+    pub fn execute(intent: AgentIntent) -> Self {
+        Self::Execute(PlannedIntent::new(intent))
+    }
+}
+
+impl From<AgentIntent> for PlannedIntent {
+    fn from(intent: AgentIntent) -> Self {
+        Self::new(intent)
+    }
 }
 
 /// Policy failures, not decisions. A timeout or panic is not the same
-/// as choosing `NoAction`.
-#[derive(Clone, Debug, thiserror::Error, Serialize, Deserialize)]
+/// as choosing `NoAction`. Recorded inline on the envelope via
+/// [`PolicyDecision::Failed`] so every cycle has a complete audit
+/// record.
+#[derive(Clone, Debug, PartialEq, thiserror::Error, Serialize, Deserialize)]
 pub enum PolicyError {
     #[error("policy timed out after {timeout_ms}ms")]
     Timeout { timeout_ms: u64 },

@@ -20,10 +20,10 @@
 //! action guardrails. Produces a [`DecisionEnvelope`] carrying the
 //! decision and the [`PlannedIntentOutcome`] for that intent.
 //!
-//! Every `Execute` decision produces an envelope, even when capability
-//! checks, guardrails, or lowering fail. The canonical record has no
-//! gaps. Policy failure is the only thing that prevents envelope
-//! creation.
+//! Every cycle produces an envelope. Capability denials, guardrail
+//! rejections, and lowering failures are recorded in the outcome.
+//! Policy failures are recorded as [`PolicyDecision::Failed`] with
+//! the error inline. The canonical record has no gaps.
 
 use nautilus_core::{UUID4, UnixNanos};
 
@@ -37,18 +37,8 @@ use crate::{
     guardrail::{ActionGuardrail, IntentGuardrail},
     intent::AgentIntent,
     lowering::{LoweringContext, lower_planned_intent},
-    policy::{AgentPolicy, PlannedIntent, PolicyDecision, PolicyError},
+    policy::{AgentPolicy, PlannedIntent, PolicyDecision},
 };
-
-/// Policy failure is the only thing that prevents envelope creation.
-/// Capability denials, guardrail rejections, and lowering failures
-/// are all recorded in the envelope so the canonical record has no
-/// gaps.
-#[derive(Debug, thiserror::Error)]
-pub enum PipelineError {
-    #[error(transparent)]
-    Policy(#[from] PolicyError),
-}
 
 pub struct DecisionPipeline {
     policy: Box<dyn AgentPolicy>,
@@ -79,26 +69,26 @@ impl DecisionPipeline {
 
     /// Run one decision cycle.
     ///
-    /// Every `Execute` decision produces a [`DecisionEnvelope`] with
-    /// a [`PlannedIntentOutcome`], even when capability checks,
-    /// guardrails, or lowering fail. Returns [`PipelineError::Policy`]
-    /// only when the policy itself cannot produce a decision.
-    pub async fn run(
-        &self,
-        trigger: DecisionTrigger,
-        context: AgentContext,
-    ) -> Result<DecisionEnvelope, PipelineError> {
+    /// Every cycle produces a [`DecisionEnvelope`]. `Execute`
+    /// decisions carry a [`PlannedIntentOutcome`] even when capability
+    /// checks, guardrails, or lowering fail. `Failed` decisions carry
+    /// the policy error inline with `outcome: None`. `NoAction`
+    /// decisions have `outcome: None`.
+    pub async fn run(&self, trigger: DecisionTrigger, context: AgentContext) -> DecisionEnvelope {
         let ts_created = context.ts_context;
-        let decision = self.policy.evaluate(&context).await?;
+        let decision = match self.policy.evaluate(&context).await {
+            Ok(decision) => decision,
+            Err(e) => PolicyDecision::Failed(e),
+        };
 
         let outcome = match &decision {
-            PolicyDecision::NoAction => None,
             PolicyDecision::Execute(planned_intent) => {
                 Some(self.evaluate_planned_intent(planned_intent, &context, ts_created))
             }
+            PolicyDecision::NoAction | PolicyDecision::Failed(_) => None,
         };
 
-        Ok(DecisionEnvelope {
+        DecisionEnvelope {
             envelope_id: UUID4::new(),
             schema_version: ENVELOPE_SCHEMA_VERSION,
             trigger,
@@ -108,7 +98,7 @@ impl DecisionPipeline {
             reconciliation: None,
             ts_created,
             ts_reconciled: None,
-        })
+        }
     }
 
     fn evaluate_planned_intent(

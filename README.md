@@ -40,7 +40,7 @@ NautilusTrader crates and reuses their real model types.
   `QuoteTick`, `Bar`, `AccountState`, `PositionSnapshot`, `OrderSnapshot`,
   and `PositionStatusReport`.
 - `AgentPolicy`: the trait a policy implements.
-- `PolicyDecision`: `Execute(PlannedIntent)` or `NoAction`.
+- `PolicyDecision`: `Execute(PlannedIntent)`, `NoAction`, or `Failed(PolicyError)`.
 - `PlannedIntent`: stable `intent_id` correlation wrapper around an
   `AgentIntent`.
 - `AgentIntent`: semantic actions with execution constraints.
@@ -62,6 +62,7 @@ flowchart TD
     B --> C[AgentPolicy::evaluate]
     C --> D{PolicyDecision}
     D -- NoAction --> E[DecisionEnvelope]
+    D -- Failed(PolicyError) --> E
     D -- Execute(PlannedIntent) --> F[Capability check]
     F -- Denied --> E
     F -- Passed --> G[Intent guardrails]
@@ -119,7 +120,8 @@ compilers use between high-level IR and machine code.
 **Canonical decision record.** Every decision cycle produces a
 `DecisionEnvelope` containing the trigger, context, decision, and a
 `PlannedIntentOutcome` for the planned intent (capability check,
-guardrail results, lowering, lowered action). One record per cycle,
+guardrail results, lowering, lowered action). Policy errors are
+recorded inline as `PolicyDecision::Failed`. One record per cycle,
 no gaps: the envelope is the single source of truth for replay and
 audit.
 
@@ -149,9 +151,9 @@ Research and risk management intents are lowerable today:
   capability checks, dual guardrails, lowering with explicit outcome
   tracking, and envelope creation.
 - **Planning**: `PolicyDecision::Execute` carries a single
-  `PlannedIntent` with a stable `intent_id`. The envelope records one
-  `PlannedIntentOutcome` for that intent. Multi-intent plans are not
-  part of the current protocol.
+  `PlannedIntent` with a stable `intent_id`; `NoAction` records a
+  no-op cycle; `Failed(PolicyError)` records a policy failure inline.
+  Multi-intent plans are not part of the current protocol.
 - **Replay**: `DecisionRecorder` writes JSONL. The replay engine reads it
   back and compares outcomes across policy or guardrail changes.
 - **Guardrails**: `PositionLimitGuardrail` enforces per-order quantity
@@ -191,9 +193,7 @@ Near-term priorities, in order:
 1. **Research workflow depth.** Add fields to research intent variants for
    backtest configuration, parameter sets, and result handles. Connect to
    the NautilusTrader backtest engine.
-2. **Policy outcome recording.** Record policy failures in the envelope
-   without leaving audit gaps.
-3. **Execution tier.** Entry orders, limit strategies, and venue-specific
+2. **Execution tier.** Entry orders, limit strategies, and venue-specific
    execution. Unlocked after research and risk management are proven.
 
 Multi-intent plans are deliberately out of scope. A policy emits one

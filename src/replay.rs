@@ -28,7 +28,7 @@ use crate::{
         PlannedIntentOutcome,
     },
     intent::AgentIntent,
-    pipeline::{DecisionPipeline, PipelineError},
+    pipeline::DecisionPipeline,
     policy::{PlannedIntent, PolicyDecision},
 };
 
@@ -44,8 +44,6 @@ pub enum ReplayError {
         version: u32,
         expected: u32,
     },
-    #[error(transparent)]
-    Pipeline(#[from] PipelineError),
 }
 
 /// Read a JSONL file into a vector of decision envelopes.
@@ -167,7 +165,7 @@ impl ReplayRunner {
             let replayed = self
                 .pipeline
                 .run(envelope.trigger.clone(), envelope.context.clone())
-                .await?;
+                .await;
             results.push(ReplayResult {
                 original: envelope,
                 replayed,
@@ -406,6 +404,7 @@ fn decisions_match(a: &PolicyDecision, b: &PolicyDecision) -> bool {
     match (a, b) {
         (PolicyDecision::NoAction, PolicyDecision::NoAction) => true,
         (PolicyDecision::Execute(pa), PolicyDecision::Execute(pb)) => planned_intents_match(pa, pb),
+        (PolicyDecision::Failed(ea), PolicyDecision::Failed(eb)) => ea == eb,
         _ => false,
     }
 }
@@ -420,6 +419,7 @@ fn decision_detail(decision: &PolicyDecision) -> String {
         PolicyDecision::Execute(planned_intent) => {
             format!("Execute({})", intent_variant_name(&planned_intent.intent))
         }
+        PolicyDecision::Failed(_) => "Failed".to_string(),
     }
 }
 

@@ -33,16 +33,14 @@ struct BacktestIterationPolicy;
 impl AgentPolicy for BacktestIterationPolicy {
     fn evaluate<'a>(&'a self, _context: &'a AgentContext) -> PolicyFuture<'a> {
         Box::pin(async move {
-            Ok(PolicyDecision::Execute(PlannedIntent::new(
-                AgentIntent::RunBacktest {
-                    instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
-                    catalog_path: "/data/catalog".to_string(),
-                    data_cls: "Bar".to_string(),
-                    bar_spec: Some("1-MINUTE-LAST".to_string()),
-                    start_ns: None,
-                    end_ns: None,
-                },
-            )))
+            Ok(PolicyDecision::execute(AgentIntent::RunBacktest {
+                instrument_id: InstrumentId::from("BTCUSDT.BINANCE"),
+                catalog_path: "/data/catalog".to_string(),
+                data_cls: "Bar".to_string(),
+                bar_spec: Some("1-MINUTE-LAST".to_string()),
+                start_ns: None,
+                end_ns: None,
+            }))
         })
     }
 }
@@ -84,7 +82,7 @@ fn main() {
         interval_ns: 60_000_000_000,
     };
 
-    let envelope = block_on(pipeline.run(trigger, context)).unwrap();
+    let envelope = block_on(pipeline.run(trigger, context));
 
     println!("Decision: {:?}", envelope.decision);
 
