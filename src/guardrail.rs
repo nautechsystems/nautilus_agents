@@ -36,3 +36,30 @@ pub trait IntentGuardrail: Send + Sync {
 pub trait ActionGuardrail: Send + Sync {
     fn evaluate(&self, action: &RuntimeAction, context: &AgentContext) -> GuardrailResult;
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::fixtures::{ApproveAllIntents, RejectAllIntents, test_context, test_intent};
+
+    #[rstest]
+    fn test_intent_guardrail_approve() {
+        let guardrail = ApproveAllIntents;
+        let result = guardrail.evaluate(&test_intent(), &test_context());
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_intent_guardrail_reject() {
+        let guardrail = RejectAllIntents("position limit exceeded".to_string());
+        let result = guardrail.evaluate(&test_intent(), &test_context());
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert_eq!(reason, "position limit exceeded");
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+}

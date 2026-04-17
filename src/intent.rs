@@ -36,17 +36,12 @@ use serde::{Deserialize, Serialize};
 /// `limit_price`, `target_price`, and `max_slippage_pct` because the
 /// default lowering only produces market IOC orders. Setting these
 /// fields returns `LoweringError::UnsupportedConstraint`.
-///
-/// `expiry_ns` and `max_quantity` are accepted but not yet applied.
-/// They are reserved for future order-type selection logic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionConstraints {
     pub target_price: Option<Price>,
     pub limit_price: Option<Price>,
     pub max_slippage_pct: Option<f64>,
     pub reduce_only: bool,
-    pub expiry_ns: Option<u64>,
-    pub max_quantity: Option<Quantity>,
 }
 
 /// Does NOT carry trader_id, strategy_id, order_type, time_in_force,
@@ -128,4 +123,94 @@ pub enum EscalationSeverity {
     Info,
     Warning,
     Critical,
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::fixtures::{test_instrument_id, test_run_backtest_intent};
+
+    #[rstest]
+    fn test_escalate_to_human_round_trip() {
+        let intent = AgentIntent::EscalateToHuman {
+            reason: "drawdown limit approaching".to_string(),
+            severity: EscalationSeverity::Warning,
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        match restored {
+            AgentIntent::EscalateToHuman { reason, severity } => {
+                assert_eq!(reason, "drawdown limit approaching");
+                assert_eq!(severity, EscalationSeverity::Warning);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_cancel_all_orders_round_trip() {
+        let intent = AgentIntent::CancelAllOrders {
+            instrument_id: test_instrument_id(),
+            order_side: OrderSide::Buy,
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        match restored {
+            AgentIntent::CancelAllOrders {
+                instrument_id,
+                order_side,
+            } => {
+                assert_eq!(instrument_id, test_instrument_id());
+                assert_eq!(order_side, OrderSide::Buy);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_research_round_trip() {
+        let intent = test_run_backtest_intent();
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, AgentIntent::RunBacktest { .. }));
+        assert_eq!(restored, intent);
+    }
+
+    #[rstest]
+    fn test_abort_backtest_round_trip() {
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-abc".to_string(),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
+    }
+
+    #[rstest]
+    fn test_compare_results_round_trip() {
+        let intent = AgentIntent::CompareResults {
+            run_ids: vec!["run-001".to_string(), "run-002".to_string()],
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
+    }
+
+    #[rstest]
+    fn test_adjust_parameters_round_trip() {
+        let intent = AgentIntent::AdjustParameters {
+            baseline_run_id: "run-001".to_string(),
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let restored: AgentIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, intent);
+    }
 }

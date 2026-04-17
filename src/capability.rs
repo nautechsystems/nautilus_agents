@@ -130,3 +130,77 @@ impl CapabilitySet {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use nautilus_model::identifiers::InstrumentId;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        fixtures::{test_capabilities, test_instrument_id, test_intent},
+        intent::AgentIntent,
+    };
+
+    #[rstest]
+    fn test_capability_check_intent_approved() {
+        let caps = test_capabilities();
+        let intent = test_intent();
+        assert!(caps.check_intent(&intent).is_ok());
+    }
+
+    #[rstest]
+    fn test_capability_check_intent_action_denied() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::new(),
+            instrument_scope: BTreeSet::from([test_instrument_id()]),
+        };
+        let intent = test_intent();
+        assert!(caps.check_intent(&intent).is_err());
+    }
+
+    #[rstest]
+    fn test_capability_check_intent_instrument_denied() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::from([ActionCapability::ManagePositions]),
+            instrument_scope: BTreeSet::new(),
+        };
+        let intent = test_intent();
+        assert!(caps.check_intent(&intent).is_err());
+    }
+
+    #[rstest]
+    fn test_capability_research_instrument_denied() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::from([ActionCapability::Research]),
+            instrument_scope: BTreeSet::from([InstrumentId::from("ETHUSDT.BINANCE")]),
+        };
+        let intent = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: None,
+            start_ns: None,
+            end_ns: None,
+        };
+        assert!(caps.check_intent(&intent).is_err());
+    }
+
+    #[rstest]
+    fn test_capability_abort_backtest_skips_instrument_scope() {
+        let caps = CapabilitySet {
+            observations: BTreeSet::new(),
+            actions: BTreeSet::from([ActionCapability::Research]),
+            instrument_scope: BTreeSet::new(),
+        };
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-001".to_string(),
+        };
+        assert!(caps.check_intent(&intent).is_ok());
+    }
+}

@@ -130,6 +130,7 @@ proptest! {
         bar_spec in optional_string_strategy(),
         start_ns in optional_nanos_strategy(),
         end_ns in optional_nanos_strategy(),
+        baseline_run_id in prop::option::of(run_id_strategy()),
     ) {
         let cmd = ResearchCommand::RunBacktest {
             instrument_id,
@@ -138,6 +139,7 @@ proptest! {
             bar_spec,
             start_ns,
             end_ns,
+            baseline_run_id,
             intent_id: UUID4::new(),
         };
         let json = serde_json::to_string(&cmd).unwrap();

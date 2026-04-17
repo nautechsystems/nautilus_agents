@@ -57,7 +57,8 @@ pub enum TradeAction {
 
 /// Executable research commands. Workflow actions like SaveCandidate
 /// and RejectHypothesis stay in the intent layer.
-/// AdjustParameters lowers into a new RunBacktest configuration.
+/// AdjustParameters lowers into a new RunBacktest configuration with
+/// `baseline_run_id` preserving the parent/child link.
 ///
 /// `intent_id` is correlation metadata that participates in
 /// `PartialEq`. Replay-level comparison that ignores `intent_id`
@@ -74,6 +75,7 @@ pub enum ResearchCommand {
         bar_spec: Option<String>,
         start_ns: Option<UnixNanos>,
         end_ns: Option<UnixNanos>,
+        baseline_run_id: Option<String>,
         intent_id: UUID4,
     },
     CancelBacktest {

@@ -238,6 +238,7 @@ pub fn lower_planned_intent(
             bar_spec: bar_spec.clone(),
             start_ns: *start_ns,
             end_ns: *end_ns,
+            baseline_run_id: None,
             intent_id,
         })),
 
@@ -249,13 +250,13 @@ pub fn lower_planned_intent(
         }
 
         AgentIntent::AdjustParameters {
+            baseline_run_id,
             instrument_id,
             catalog_path,
             data_cls,
             bar_spec,
             start_ns,
             end_ns,
-            ..
         } => Ok(RuntimeAction::Research(ResearchCommand::RunBacktest {
             instrument_id: *instrument_id,
             catalog_path: catalog_path.clone(),
@@ -263,6 +264,7 @@ pub fn lower_planned_intent(
             bar_spec: bar_spec.clone(),
             start_ns: *start_ns,
             end_ns: *end_ns,
+            baseline_run_id: Some(baseline_run_id.clone()),
             intent_id,
         })),
 
@@ -437,5 +439,515 @@ fn intent_variant_name(intent: &AgentIntent) -> &'static str {
         AgentIntent::CompareResults { .. } => "CompareResults",
         AgentIntent::SaveCandidate { .. } => "SaveCandidate",
         AgentIntent::RejectHypothesis { .. } => "RejectHypothesis",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::{
+        enums::{OrderSide, PositionSide},
+        identifiers::{ClientOrderId, PositionId, TraderId},
+        types::{Price, Quantity},
+    };
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        action::{ManagementCommand, ResearchCommand, TradeAction},
+        fixtures::{
+            lower_intent, test_context, test_context_with_position, test_instrument_id,
+            test_intent, test_lowering_ctx, test_position_snapshot, test_run_backtest_intent,
+        },
+        intent::{EscalationSeverity, ExecutionConstraints},
+        policy::PlannedIntent,
+    };
+
+    #[rstest]
+    fn test_lower_cancel_order() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-123"),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelOrder(cmd) => {
+                    assert_eq!(cmd.instrument_id, test_instrument_id());
+                    assert_eq!(cmd.client_order_id, ClientOrderId::new("O-123"));
+                    assert_eq!(cmd.trader_id, TraderId::new("TESTER-001"));
+                }
+                other => panic!("expected CancelOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_planned_intent_preserves_intent_id_in_command_params() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(AgentIntent::CancelOrder {
+            instrument_id: test_instrument_id(),
+            client_order_id: ClientOrderId::new("O-789"),
+        });
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelOrder(cmd) => {
+                    let params = cmd.params.expect("missing command params");
+                    let intent_id = planned_intent.intent_id.to_string();
+                    assert_eq!(
+                        params.get_str("nautilus_agents.intent_id"),
+                        Some(intent_id.as_str())
+                    );
+                }
+                other => panic!("expected CancelOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_planned_run_backtest_preserves_intent_id() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(test_run_backtest_intent());
+        let expected = planned_intent.intent_id;
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest { intent_id, .. }) => {
+                assert_eq!(intent_id, expected);
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_planned_pause_strategy_preserves_intent_id() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let planned_intent = PlannedIntent::new(AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        });
+        let expected = planned_intent.intent_id;
+
+        let action =
+            lower_planned_intent(&planned_intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::PauseStrategy { intent_id, .. }) => {
+                assert_eq!(intent_id, expected);
+            }
+            other => panic!("expected Management(PauseStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_cancel_all_orders() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::CancelAllOrders {
+            instrument_id: test_instrument_id(),
+            order_side: OrderSide::Buy,
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::CancelAllOrders(cmd) => {
+                    assert_eq!(cmd.instrument_id, test_instrument_id());
+                    assert_eq!(cmd.order_side, OrderSide::Buy);
+                }
+                other => panic!("expected CancelAllOrders, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_reduce_position_long_produces_sell() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+
+        let action = lower_intent(&test_intent(), &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("0.5"));
+                    assert!(submit.order_init.reduce_only);
+                    assert_eq!(submit.position_id, Some(PositionId::new("P-001")));
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_close_position_uses_full_quantity() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("1.5"));
+                    assert!(submit.order_init.reduce_only);
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_rejects_limit_price_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints {
+                limit_price: Some(Price::from("68000.00")),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("limit_price"));
+    }
+
+    #[rstest]
+    fn test_lower_rejects_target_price_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints {
+                target_price: Some(Price::from("70000.00")),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("target_price"));
+    }
+
+    #[rstest]
+    fn test_lower_rejects_max_slippage_constraint() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints {
+                max_slippage_pct: Some(0.001),
+                ..Default::default()
+            },
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("max_slippage_pct"));
+    }
+
+    #[rstest]
+    fn test_lower_run_backtest() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = test_run_backtest_intent();
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                instrument_id,
+                catalog_path,
+                data_cls,
+                bar_spec,
+                ..
+            }) => {
+                assert_eq!(instrument_id, test_instrument_id());
+                assert_eq!(catalog_path, "/data/catalog");
+                assert_eq!(data_cls, "Bar");
+                assert_eq!(bar_spec, Some("1-HOUR-BID".to_string()));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_abort_backtest() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::AbortBacktest {
+            run_id: "run-001".to_string(),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::CancelBacktest { run_id, .. }) => {
+                assert_eq!(run_id, "run-001");
+            }
+            other => panic!("expected Research(CancelBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_adjust_parameters_produces_run_backtest() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::AdjustParameters {
+            baseline_run_id: "run-001".to_string(),
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                instrument_id,
+                catalog_path,
+                data_cls,
+                bar_spec,
+                start_ns,
+                end_ns,
+                baseline_run_id,
+                ..
+            }) => {
+                assert_eq!(instrument_id, test_instrument_id());
+                assert_eq!(catalog_path, "/data/catalog");
+                assert_eq!(data_cls, "Bar");
+                assert_eq!(bar_spec, Some("5-MINUTE-MID".to_string()));
+                assert_eq!(start_ns, None);
+                assert_eq!(end_ns, None);
+                assert_eq!(baseline_run_id, Some("run-001".to_string()));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_run_backtest_has_no_baseline() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = test_run_backtest_intent();
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                baseline_run_id, ..
+            }) => {
+                assert_eq!(baseline_run_id, None);
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_compare_results() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::CompareResults {
+            run_ids: vec!["run-001".to_string(), "run-002".to_string()],
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::CompareBacktests { run_ids, .. }) => {
+                assert_eq!(run_ids, vec!["run-001", "run-002"]);
+            }
+            other => panic!("expected Research(CompareBacktests), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_run_backtest_with_time_range() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let start = UnixNanos::from(1_700_000_000_000_000_000u64);
+        let end = UnixNanos::from(1_712_000_000_000_000_000u64);
+        let intent = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "QuoteTick".to_string(),
+            bar_spec: None,
+            start_ns: Some(start),
+            end_ns: Some(end),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Research(ResearchCommand::RunBacktest {
+                data_cls,
+                bar_spec,
+                start_ns,
+                end_ns,
+                ..
+            }) => {
+                assert_eq!(data_cls, "QuoteTick");
+                assert_eq!(bar_spec, None);
+                assert_eq!(start_ns, Some(start));
+                assert_eq!(end_ns, Some(end));
+            }
+            other => panic!("expected Research(RunBacktest), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_pause_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::PauseStrategy { strategy_id, .. }) => {
+                assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
+            }
+            other => panic!("expected Management(PauseStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_resume_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ResumeStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::ResumeStrategy {
+                strategy_id, ..
+            }) => {
+                assert_eq!(strategy_id, StrategyId::new("EMACross-001"));
+            }
+            other => panic!("expected Management(ResumeStrategy), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_adjust_risk_limits() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let params = serde_json::json!({"max_drawdown_pct": 0.05});
+        let intent = AgentIntent::AdjustRiskLimits {
+            params: params.clone(),
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::AdjustRiskLimits {
+                params: lowered,
+                ..
+            }) => {
+                assert_eq!(lowered, params);
+            }
+            other => panic!("expected Management(AdjustRiskLimits), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_escalate_to_human() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::EscalateToHuman {
+            reason: "drawdown limit breached".to_string(),
+            severity: EscalationSeverity::Critical,
+        };
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Management(ManagementCommand::EscalateToHuman {
+                reason,
+                severity,
+                ..
+            }) => {
+                assert_eq!(reason, "drawdown limit breached");
+                assert_eq!(severity, EscalationSeverity::Critical);
+            }
+            other => panic!("expected Management(EscalateToHuman), got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lower_pause_strategy_rejects_cross_strategy() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("Other-999"),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("not managed by this pipeline"));
+    }
+
+    #[rstest]
+    fn test_lower_save_candidate_not_lowerable() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::SaveCandidate {
+            run_id: "run-001".to_string(),
+            label: "best so far".to_string(),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("not lowerable"));
+    }
+
+    #[rstest]
+    fn test_lower_reject_hypothesis_not_lowerable() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::RejectHypothesis {
+            run_id: "run-001".to_string(),
+            reason: "underperforms baseline".to_string(),
+        };
+        let err = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap_err();
+        assert!(err.to_string().contains("not lowerable"));
+    }
+
+    #[rstest]
+    fn test_lower_no_position_returns_error() {
+        let ctx = test_context();
+        let lowering = test_lowering_ctx();
+
+        let result = lower_intent(&test_intent(), &ctx, &lowering, ctx.ts_context);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_lower_selects_position_by_strategy() {
+        let mut ctx = test_context_with_position();
+        let mut other_position = test_position_snapshot();
+        other_position.strategy_id = StrategyId::new("Other-001");
+        other_position.position_id = PositionId::new("P-OTHER");
+        other_position.side = PositionSide::Short;
+        other_position.quantity = Quantity::from("3.0");
+        other_position.signed_qty = -3.0;
+        ctx.positions.push(other_position);
+
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ClosePosition {
+            instrument_id: test_instrument_id(),
+            constraints: ExecutionConstraints::default(),
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    assert_eq!(submit.order_init.order_side, OrderSide::Sell);
+                    assert_eq!(submit.order_init.quantity, Quantity::from("1.5"));
+                    assert_eq!(submit.position_id, Some(PositionId::new("P-001")));
+                }
+                other => panic!("expected SubmitOrder, got {other:?}"),
+            },
+            other => panic!("expected Trade, got {other:?}"),
+        }
     }
 }

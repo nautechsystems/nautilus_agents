@@ -253,6 +253,7 @@ fn research_commands_match(a: &ResearchCommand, b: &ResearchCommand) -> bool {
                 bar_spec: bar_spec_a,
                 start_ns: start_a,
                 end_ns: end_a,
+                baseline_run_id: baseline_a,
                 ..
             },
             ResearchCommand::RunBacktest {
@@ -262,6 +263,7 @@ fn research_commands_match(a: &ResearchCommand, b: &ResearchCommand) -> bool {
                 bar_spec: bar_spec_b,
                 start_ns: start_b,
                 end_ns: end_b,
+                baseline_run_id: baseline_b,
                 ..
             },
         ) => {
@@ -271,6 +273,7 @@ fn research_commands_match(a: &ResearchCommand, b: &ResearchCommand) -> bool {
                 && bar_spec_a == bar_spec_b
                 && start_a == start_b
                 && end_a == end_b
+                && baseline_a == baseline_b
         }
         (
             ResearchCommand::CancelBacktest { run_id: run_a, .. },
@@ -447,5 +450,530 @@ fn guardrail_label(result: &Option<GuardrailResult>) -> &'static str {
         None => "none",
         Some(GuardrailResult::Approved) => "approved",
         Some(GuardrailResult::Rejected { .. }) => "rejected",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nautilus_core::{UUID4, UnixNanos};
+    use nautilus_model::identifiers::{StrategyId, TraderId};
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        action::ManagementCommand,
+        capability::ActionCapability,
+        envelope::{DecisionEnvelope, DecisionTrigger, ENVELOPE_SCHEMA_VERSION},
+        fixtures::{
+            ApproveAllActions, ApproveAllIntents, FixedPolicy, FreshPlanPolicy, RejectAllIntents,
+            execute, planned_intent, run_pipeline, run_replay, test_context,
+            test_context_with_position, test_instrument_id, test_intent, test_lowering_ctx,
+        },
+        intent::EscalationSeverity,
+        lowering::LoweringContext,
+        pipeline::DecisionPipeline,
+        policy::{PolicyDecision, PolicyError},
+        recording::DecisionRecorder,
+    };
+
+    fn action_strategy_id(action: &Option<RuntimeAction>) -> Option<StrategyId> {
+        match action {
+            Some(RuntimeAction::Management(ManagementCommand::PauseStrategy {
+                strategy_id,
+                ..
+            })) => Some(*strategy_id),
+            _ => None,
+        }
+    }
+
+    #[rstest]
+    fn test_record_then_read_fidelity() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+
+        let envelope1 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let decision = execute(test_intent());
+        let intent_id = planned_intent(&decision).intent_id;
+        let envelope2 = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::MarketData {
+                instrument_id: test_instrument_id(),
+            },
+            context: test_context(),
+            decision,
+            outcome: Some(crate::envelope::PlannedIntentOutcome {
+                intent_id,
+                intent_guardrail: Some(GuardrailResult::Approved),
+                lowering_result: None,
+                lowered_action: None,
+                action_guardrail: None,
+            }),
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_001_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        recorder.record(&envelope1).unwrap();
+        recorder.record(&envelope2).unwrap();
+
+        let restored = read_envelopes(&path).unwrap();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].envelope_id, envelope1.envelope_id);
+        assert_eq!(restored[1].envelope_id, envelope2.envelope_id);
+        assert!(matches!(restored[0].decision, PolicyDecision::NoAction));
+        assert_eq!(planned_intent(&restored[1].decision).intent, test_intent());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_record_then_read_failed_envelope() {
+        let dir = std::env::temp_dir().join(format!("nautilus_failed_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::Failed(PolicyError::Internal {
+                message: "downstream LLM rejected request".to_string(),
+            }),
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&envelope).unwrap();
+
+        let restored = read_envelopes(&path).unwrap();
+        assert_eq!(restored.len(), 1);
+        match &restored[0].decision {
+            PolicyDecision::Failed(PolicyError::Internal { message }) => {
+                assert_eq!(message, "downstream LLM rejected request");
+            }
+            other => panic!("expected Failed(Internal), got {other:?}"),
+        }
+        assert!(restored[0].outcome.is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_read_envelopes_malformed_line() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_bad_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(&path, "{\"valid\":false}\n{not json\n").unwrap();
+
+        let err = read_envelopes(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 1"), "expected line 1 error, got: {msg}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_read_envelopes_missing_file() {
+        let path = std::env::temp_dir().join(format!("nonexistent_{}.jsonl", UUID4::new()));
+        let err = read_envelopes(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("I/O error"), "expected I/O error, got: {msg}");
+    }
+
+    #[rstest]
+    fn test_replay_different_policy_changes_decision() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_diff_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let act_policy = FixedPolicy(execute(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(act_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position());
+        assert!(matches!(original.decision, PolicyDecision::Execute(_)));
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let no_action_policy = FixedPolicy(PolicyDecision::NoAction);
+        let replay_pipeline =
+            DecisionPipeline::new(Box::new(no_action_policy), test_lowering_ctx());
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+        assert!(results[0].summary().contains("changed"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_ignores_fresh_intent_ids_when_intent_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_intent_ids_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+
+        let original_policy = FreshPlanPolicy(test_intent());
+        let original_pipeline =
+            DecisionPipeline::new(Box::new(original_policy), test_lowering_ctx())
+                .with_intent_guardrail(Box::new(ApproveAllIntents))
+                .with_action_guardrail(Box::new(ApproveAllActions));
+        let original = run_pipeline(&original_pipeline, trigger, test_context_with_position());
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let replay_policy = FreshPlanPolicy(test_intent());
+        let replay_pipeline = DecisionPipeline::new(Box::new(replay_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_stricter_guardrail_rejects() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_guard_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let policy = FixedPolicy(execute(test_intent()));
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(ApproveAllIntents))
+            .with_action_guardrail(Box::new(ApproveAllActions));
+
+        let trigger = DecisionTrigger::MarketData {
+            instrument_id: test_instrument_id(),
+        };
+        let original = run_pipeline(&pipeline, trigger, test_context_with_position());
+        let original_outcome_approved = original.outcome.as_ref().expect("expected outcome");
+        assert!(matches!(
+            original_outcome_approved.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let replay_policy = FixedPolicy(execute(test_intent()));
+        let replay_pipeline = DecisionPipeline::new(Box::new(replay_policy), test_lowering_ctx())
+            .with_intent_guardrail(Box::new(RejectAllIntents("stricter limit".to_string())));
+        let runner = ReplayRunner::new(replay_pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+        let original_outcome = results[0]
+            .original
+            .outcome
+            .as_ref()
+            .expect("expected original outcome");
+        let replayed_outcome = results[0]
+            .replayed
+            .outcome
+            .as_ref()
+            .expect("expected replayed outcome");
+        assert!(matches!(
+            original_outcome.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(matches!(
+            replayed_outcome.intent_guardrail,
+            Some(GuardrailResult::Rejected { .. })
+        ));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_skip_no_action() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_skip_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+
+        let no_action_envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+        recorder.record(&no_action_envelope).unwrap();
+
+        let envelopes = read_envelopes(&path).unwrap();
+        assert_eq!(envelopes.len(), 1);
+
+        let policy = FixedPolicy(PolicyDecision::NoAction);
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let config = ReplayConfig {
+            skip_no_action: true,
+        };
+        let runner = ReplayRunner::new(pipeline, config);
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_noaction_replayed_as_noaction_is_unchanged() {
+        let dir =
+            std::env::temp_dir().join(format!("nautilus_replay_noaction_eq_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let no_action_envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&no_action_envelope).unwrap();
+
+        let policy = FixedPolicy(PolicyDecision::NoAction);
+        let pipeline = DecisionPipeline::new(Box::new(policy), test_lowering_ctx());
+        let runner = ReplayRunner::new(pipeline, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_detects_failed_error_change() {
+        let build = |error: PolicyError| DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::Failed(error),
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let same = ReplayResult {
+            original: build(PolicyError::Timeout { timeout_ms: 100 }),
+            replayed: build(PolicyError::Timeout { timeout_ms: 100 }),
+        };
+        assert!(!same.decision_changed());
+
+        let different = ReplayResult {
+            original: build(PolicyError::Timeout { timeout_ms: 100 }),
+            replayed: build(PolicyError::Timeout { timeout_ms: 200 }),
+        };
+        assert!(different.decision_changed());
+    }
+
+    #[rstest]
+    fn test_replay_detects_research_payload_change() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_research_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let intent_a = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("1-HOUR-BID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let policy_a = FixedPolicy(execute(intent_a));
+        let pipeline_a = DecisionPipeline::new(Box::new(policy_a), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let mut ctx = test_context();
+        ctx.capabilities.actions.insert(ActionCapability::Research);
+        let original = run_pipeline(&pipeline_a, trigger, ctx);
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let intent_b = AgentIntent::RunBacktest {
+            instrument_id: test_instrument_id(),
+            catalog_path: "/data/catalog".to_string(),
+            data_cls: "Bar".to_string(),
+            bar_spec: Some("5-MINUTE-MID".to_string()),
+            start_ns: None,
+            end_ns: None,
+        };
+        let policy_b = FixedPolicy(execute(intent_b));
+        let pipeline_b = DecisionPipeline::new(Box::new(policy_b), test_lowering_ctx());
+        let runner = ReplayRunner::new(pipeline_b, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_detects_management_pause_strategy_change() {
+        let dir = std::env::temp_dir().join(format!("nautilus_replay_mgmt_pause_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut ctx = test_context();
+        ctx.capabilities
+            .actions
+            .insert(ActionCapability::ManageStrategies);
+
+        let lowering_a = LoweringContext {
+            trader_id: TraderId::new("TESTER-001"),
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let intent_a = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        let policy_a = FixedPolicy(execute(intent_a));
+        let pipeline_a = DecisionPipeline::new(Box::new(policy_a), lowering_a);
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let original = run_pipeline(&pipeline_a, trigger, ctx);
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let lowering_b = LoweringContext {
+            trader_id: TraderId::new("TESTER-001"),
+            strategy_id: StrategyId::new("EMACross-002"),
+        };
+        let intent_b = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-002"),
+        };
+        let policy_b = FixedPolicy(execute(intent_b));
+        let pipeline_b = DecisionPipeline::new(Box::new(policy_b), lowering_b);
+        let runner = ReplayRunner::new(pipeline_b, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        let original_outcome = results[0]
+            .original
+            .outcome
+            .as_ref()
+            .expect("expected original outcome");
+        let replayed_outcome = results[0]
+            .replayed
+            .outcome
+            .as_ref()
+            .expect("expected replayed outcome");
+        assert_ne!(
+            action_strategy_id(&original_outcome.lowered_action),
+            action_strategy_id(&replayed_outcome.lowered_action),
+            "fixture must produce different strategy_ids for the assertion to be meaningful",
+        );
+        assert!(results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[rstest]
+    fn test_replay_detects_management_escalation_severity_change() {
+        let dir =
+            std::env::temp_dir().join(format!("nautilus_replay_mgmt_escalate_{}", UUID4::new()));
+        let path = dir.join("decisions.jsonl");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut ctx = test_context();
+        ctx.capabilities.actions.insert(ActionCapability::Escalate);
+
+        let intent_a = AgentIntent::EscalateToHuman {
+            reason: "drawdown approaching limit".to_string(),
+            severity: EscalationSeverity::Warning,
+        };
+        let policy_a = FixedPolicy(execute(intent_a));
+        let pipeline_a = DecisionPipeline::new(Box::new(policy_a), test_lowering_ctx());
+        let trigger = DecisionTrigger::Timer {
+            interval_ns: 60_000_000_000,
+        };
+        let original = run_pipeline(&pipeline_a, trigger, ctx.clone());
+
+        let mut recorder = DecisionRecorder::new(&path).unwrap();
+        recorder.record(&original).unwrap();
+
+        let intent_b = AgentIntent::EscalateToHuman {
+            reason: "drawdown approaching limit".to_string(),
+            severity: EscalationSeverity::Critical,
+        };
+        let policy_b = FixedPolicy(execute(intent_b));
+        let pipeline_b = DecisionPipeline::new(Box::new(policy_b), test_lowering_ctx());
+        let runner = ReplayRunner::new(pipeline_b, ReplayConfig::default());
+
+        let envelopes = read_envelopes(&path).unwrap();
+        let results = run_replay(&runner, envelopes).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].decision_changed());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

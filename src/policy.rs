@@ -102,3 +102,56 @@ pub enum PolicyError {
 pub trait AgentPolicy: Send + Sync {
     fn evaluate<'a>(&'a self, context: &'a AgentContext) -> PolicyFuture<'a>;
 }
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::types::Quantity;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        fixtures::{execute, planned_intent, test_instrument_id, test_intent},
+        intent::AgentIntent,
+    };
+
+    #[rstest]
+    fn test_policy_decision_round_trip() {
+        let decision = execute(test_intent());
+        let original_intent_id = planned_intent(&decision).intent_id;
+        let json = serde_json::to_string(&decision).unwrap();
+        let restored: PolicyDecision = serde_json::from_str(&json).unwrap();
+        let restored_intent = planned_intent(&restored);
+
+        assert_eq!(restored_intent.intent_id, original_intent_id);
+
+        match &restored_intent.intent {
+            AgentIntent::ReducePosition {
+                instrument_id,
+                quantity,
+                constraints,
+            } => {
+                assert_eq!(*instrument_id, test_instrument_id());
+                assert_eq!(*quantity, Quantity::from("0.5"));
+                assert!(constraints.reduce_only);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_no_action_round_trip() {
+        let decision = PolicyDecision::NoAction;
+        let json = serde_json::to_string(&decision).unwrap();
+        let restored: PolicyDecision = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, PolicyDecision::NoAction));
+    }
+
+    #[rstest]
+    fn test_policy_decision_execute_constructs_execute_variant() {
+        let intent = test_intent();
+        match PolicyDecision::execute(intent.clone()) {
+            PolicyDecision::Execute(planned) => assert_eq!(planned.intent, intent),
+            other => panic!("expected Execute, got {other:?}"),
+        }
+    }
+}

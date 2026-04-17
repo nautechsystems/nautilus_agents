@@ -92,3 +92,80 @@ impl IntentGuardrail for MaxDrawdownGuardrail {
         GuardrailResult::Approved
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::identifiers::StrategyId;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        fixtures::{test_account_state, test_context, test_currency, test_intent},
+        intent::EscalationSeverity,
+    };
+
+    #[rstest]
+    fn test_max_drawdown_approves_within_limit() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(9500.0));
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+
+    #[rstest]
+    fn test_max_drawdown_rejects_beyond_limit() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(8500.0));
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        match result {
+            GuardrailResult::Rejected { reason } => {
+                assert!(reason.contains("exceeds limit"));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_max_drawdown_allows_management_during_drawdown() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let mut ctx = test_context();
+        ctx.account_state = Some(test_account_state(5000.0));
+
+        let pause = AgentIntent::PauseStrategy {
+            strategy_id: StrategyId::new("EMACross-001"),
+        };
+        assert!(matches!(
+            guardrail.evaluate(&pause, &ctx),
+            GuardrailResult::Approved
+        ));
+
+        let escalate = AgentIntent::EscalateToHuman {
+            reason: "drawdown".to_string(),
+            severity: EscalationSeverity::Critical,
+        };
+        assert!(matches!(
+            guardrail.evaluate(&escalate, &ctx),
+            GuardrailResult::Approved
+        ));
+    }
+
+    #[rstest]
+    fn test_max_drawdown_approves_without_account_state() {
+        let currency = test_currency();
+        let guardrail = MaxDrawdownGuardrail::new(Money::new(10000.0, currency), 0.10);
+        let ctx = test_context();
+
+        let intent = test_intent();
+        let result = guardrail.evaluate(&intent, &ctx);
+        assert!(matches!(result, GuardrailResult::Approved));
+    }
+}

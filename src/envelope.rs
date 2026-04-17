@@ -121,3 +121,117 @@ pub struct DecisionEnvelope {
     pub ts_created: UnixNanos,
     pub ts_reconciled: Option<UnixNanos>,
 }
+
+#[cfg(test)]
+mod tests {
+    use nautilus_model::types::{Price, Quantity};
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{
+        fixtures::{execute, planned_intent, test_context, test_instrument_id, test_intent},
+        policy::PolicyDecision,
+    };
+
+    #[rstest]
+    fn test_decision_envelope_round_trip() {
+        let decision = execute(test_intent());
+        let intent_id = planned_intent(&decision).intent_id;
+        let envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::MarketData {
+                instrument_id: test_instrument_id(),
+            },
+            context: test_context(),
+            decision,
+            outcome: Some(PlannedIntentOutcome {
+                intent_id,
+                intent_guardrail: Some(GuardrailResult::Approved),
+                lowering_result: Some(LoweringOutcome::Success),
+                lowered_action: None,
+                action_guardrail: None,
+            }),
+            reconciliation: Some(ReconciliationOutcome::Filled {
+                fill_price: Price::from("68449.50"),
+                fill_quantity: Quantity::from("0.5"),
+            }),
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: Some(UnixNanos::from(1_712_400_000_500_000_000u64)),
+        };
+
+        let json = serde_json::to_string_pretty(&envelope).unwrap();
+        let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.schema_version, 1);
+        assert_eq!(planned_intent(&restored.decision).intent, test_intent());
+        let outcome = restored.outcome.as_ref().expect("expected outcome");
+        assert_eq!(outcome.intent_id, intent_id);
+        assert!(matches!(
+            outcome.intent_guardrail,
+            Some(GuardrailResult::Approved)
+        ));
+        assert!(matches!(
+            restored.reconciliation,
+            Some(ReconciliationOutcome::Filled { .. })
+        ));
+    }
+
+    #[rstest]
+    fn test_no_action_envelope_has_no_outcome() {
+        let envelope = DecisionEnvelope {
+            envelope_id: UUID4::new(),
+            schema_version: ENVELOPE_SCHEMA_VERSION,
+            trigger: DecisionTrigger::Timer {
+                interval_ns: 60_000_000_000,
+            },
+            context: test_context(),
+            decision: PolicyDecision::NoAction,
+            outcome: None,
+            reconciliation: None,
+            ts_created: UnixNanos::from(1_712_400_000_000_000_000u64),
+            ts_reconciled: None,
+        };
+
+        let json = serde_json::to_string(&envelope).unwrap();
+        let restored: DecisionEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored.decision, PolicyDecision::NoAction));
+        assert!(restored.outcome.is_none());
+        assert!(restored.reconciliation.is_none());
+    }
+
+    #[rstest]
+    fn test_guardrail_rejected_round_trip() {
+        let result = GuardrailResult::Rejected {
+            reason: "position limit exceeded".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: GuardrailResult = serde_json::from_str(&json).unwrap();
+        match restored {
+            GuardrailResult::Rejected { reason } => {
+                assert_eq!(reason, "position limit exceeded");
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[rstest]
+    fn test_lowering_outcome_round_trip() {
+        let success = LoweringOutcome::Success;
+        let json = serde_json::to_string(&success).unwrap();
+        let restored: LoweringOutcome = serde_json::from_str(&json).unwrap();
+        assert!(matches!(restored, LoweringOutcome::Success));
+
+        let failed = LoweringOutcome::Failed {
+            reason: "no position found".to_string(),
+        };
+        let json = serde_json::to_string(&failed).unwrap();
+        let restored: LoweringOutcome = serde_json::from_str(&json).unwrap();
+        match restored {
+            LoweringOutcome::Failed { reason } => {
+                assert_eq!(reason, "no position found");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+}
