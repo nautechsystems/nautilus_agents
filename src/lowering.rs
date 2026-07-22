@@ -486,6 +486,33 @@ mod tests {
     }
 
     #[rstest]
+    fn test_lower_reduce_position_generates_agent_client_order_id() {
+        let ctx = test_context_with_position();
+        let lowering = test_lowering_ctx();
+        let intent = AgentIntent::ReducePosition {
+            instrument_id: test_instrument_id(),
+            quantity: Quantity::from("0.5"),
+            constraints: ExecutionConstraints {
+                reduce_only: true,
+                ..Default::default()
+            },
+        };
+
+        let action = lower_intent(&intent, &ctx, &lowering, ctx.ts_context).unwrap();
+        match action {
+            RuntimeAction::Trade(trade) => match *trade {
+                TradeAction::SubmitOrder(submit) => {
+                    let client_order_id = submit.client_order_id.to_string();
+                    let uuid = client_order_id.strip_prefix("AGENT-").unwrap();
+                    uuid.parse::<UUID4>().unwrap();
+                }
+                other => panic!("expected SubmitOrder, was {other:?}"),
+            },
+            other => panic!("expected Trade, was {other:?}"),
+        }
+    }
+
+    #[rstest]
     fn test_lower_planned_intent_preserves_intent_id_in_command_params() {
         let ctx = test_context_with_position();
         let lowering = test_lowering_ctx();
