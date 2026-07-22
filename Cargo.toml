@@ -1,34 +1,52 @@
 [package]
 name = "nautilus-agents"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.94.1"
+rust-version = "1.97.1"
 authors = ["Nautech Systems <info@nautechsystems.io>"]
 license = "LGPL-3.0-or-later"
-description = "Open agent protocol for the Nautilus trading engine"
+description = "Public agent authoring and assurance SDK for NautilusTrader"
 documentation = "https://docs.nautilustrader.io"
 repository = "https://github.com/nautechsystems/nautilus_agents"
 homepage = "https://nautilustrader.io"
 categories = ["finance", "simulation", "asynchronous"]
 keywords = ["finance", "trading", "agents", "algorithmic-trading"]
 readme = "README.md"
+include = [
+  "contract/v1/**",
+  "examples/**",
+  "src/**",
+  "Cargo.toml",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+]
 
 [workspace]
+members = ["tools/contract-schema"]
+resolver = "2"
 
 [lib]
 name = "nautilus_agents"
 
-[dependencies]
-nautilus-common = "0.55.0"
-nautilus-core = "0.55.0"
-nautilus-model = "0.55.0"
+[features]
+default = []
+conformance = []
+testkit = []
 
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0.18"
+[dependencies]
+futures-timer = "3.0.4"
+futures-util = "0.3.33"
+schemars = "1.2.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_json_canonicalizer = "=0.3.2"
+sha2 = "0.11.0"
+thiserror = "2.0.19"
+uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]
-pollster = "0.4.0"
+pollster = "1.0.1"
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 rstest = "0.26.1"
 

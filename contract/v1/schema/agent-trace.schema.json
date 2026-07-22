@@ -1,0 +1,282 @@
+{
+  "$defs": {
+    "AgentFailure": {
+      "additionalProperties": false,
+      "description": "Describes a local policy failure without implying a NautilusTrader outcome.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AgentFailureKind",
+          "description": "The stable local failure category."
+        },
+        "message": {
+          "description": "A human-readable failure explanation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "AgentFailureKind": {
+      "description": "Enumerates local policy failure categories.",
+      "oneOf": [
+        {
+          "const": "policy_error",
+          "description": "The policy returned an error.",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "description": "The local runner reached its configured timeout.",
+          "type": "string"
+        },
+        {
+          "const": "panic",
+          "description": "The policy future panicked.",
+          "type": "string"
+        }
+      ]
+    },
+    "ContentDigest": {
+      "description": "Stores a lowercase SHA-256 content digest.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "InstrumentId": {
+      "description": "Identifies an instrument without exposing engine types.",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+      "type": "string"
+    },
+    "LiveIntent": {
+      "description": "Enumerates the live proposal vocabulary for protocol 1.0.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Proposes reducing an existing position without adding risk.",
+          "properties": {
+            "reduce_position": {
+              "$ref": "#/$defs/ReducePosition"
+            }
+          },
+          "required": [
+            "reduce_position"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LiveProposal": {
+      "additionalProperties": false,
+      "description": "Wraps the single live intent carried by a request.",
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/LiveIntent",
+          "description": "The semantic intent for NautilusTrader to consider."
+        }
+      },
+      "required": [
+        "intent"
+      ],
+      "type": "object"
+    },
+    "ObservationId": {
+      "description": "Identifies an observation constructed by NautilusTrader.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "ObservationRef": {
+      "additionalProperties": false,
+      "description": "Links a request or trace to exact observation content.",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest",
+          "description": "The exact observation content digest."
+        },
+        "id": {
+          "$ref": "#/$defs/ObservationId",
+          "description": "The observation identity."
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "PolicyMetadata": {
+      "additionalProperties": false,
+      "description": "Identifies a caller's policy implementation.",
+      "properties": {
+        "name": {
+          "description": "The policy name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The caller-defined policy version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "PositionId": {
+      "description": "Identifies a position without exposing engine types.",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+      "type": "string"
+    },
+    "ProtocolVersion": {
+      "additionalProperties": false,
+      "description": "Identifies an external protocol revision independently of crate SemVer.",
+      "properties": {
+        "major": {
+          "description": "The compatibility-breaking protocol component.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "description": "The backward-compatible protocol component.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Quantity": {
+      "description": "Stores a strictly positive canonical decimal quantity.",
+      "pattern": "^(?:[1-9][0-9]*|(?:0|[1-9][0-9]*)\\.[0-9]{0,15}[1-9])$",
+      "type": "string"
+    },
+    "ReducePosition": {
+      "additionalProperties": false,
+      "description": "Identifies an existing position and the quantity to reduce.",
+      "properties": {
+        "instrument_id": {
+          "$ref": "#/$defs/InstrumentId",
+          "description": "The instrument expected for the fresh position."
+        },
+        "position_id": {
+          "$ref": "#/$defs/PositionId",
+          "description": "The position to reduce."
+        },
+        "quantity": {
+          "$ref": "#/$defs/Quantity",
+          "description": "The strictly positive reduction quantity."
+        }
+      },
+      "required": [
+        "position_id",
+        "instrument_id",
+        "quantity"
+      ],
+      "type": "object"
+    },
+    "TimestampNs": {
+      "description": "Stores unsigned Unix nanoseconds and serializes them as a decimal JSON string.",
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "TraceId": {
+      "description": "Identifies an agent-side trace.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "TraceOutcome": {
+      "description": "Captures a proposal, deliberate no-proposal result, or local failure.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The policy produced one semantic proposal.",
+          "properties": {
+            "proposed": {
+              "$ref": "#/$defs/LiveProposal"
+            }
+          },
+          "required": [
+            "proposed"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "no_proposal",
+          "description": "The policy deliberately produced no proposal.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The local policy evaluation failed.",
+          "properties": {
+            "failed": {
+              "$ref": "#/$defs/AgentFailure"
+            }
+          },
+          "required": [
+            "failed"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://schemas.nautilustrader.io/agents/v1/agent-trace.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Records one complete agent-side policy evaluation.",
+  "properties": {
+    "completed_at": {
+      "$ref": "#/$defs/TimestampNs",
+      "description": "The policy evaluation completion time."
+    },
+    "observation": {
+      "$ref": "#/$defs/ObservationRef",
+      "description": "The exact observation used by the policy."
+    },
+    "outcome": {
+      "$ref": "#/$defs/TraceOutcome",
+      "description": "The complete agent-side policy outcome."
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyMetadata",
+      "description": "The caller-supplied policy identity."
+    },
+    "started_at": {
+      "$ref": "#/$defs/TimestampNs",
+      "description": "The policy evaluation start time."
+    },
+    "trace_id": {
+      "$ref": "#/$defs/TraceId",
+      "description": "The agent-created trace identity."
+    },
+    "version": {
+      "$ref": "#/$defs/ProtocolVersion",
+      "description": "The external protocol version."
+    }
+  },
+  "required": [
+    "version",
+    "trace_id",
+    "observation",
+    "policy",
+    "started_at",
+    "completed_at",
+    "outcome"
+  ],
+  "title": "AgentTrace",
+  "type": "object"
+}

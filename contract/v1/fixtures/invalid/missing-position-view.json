@@ -1,0 +1,14 @@
+{
+  "instruments": [
+    {
+      "instrument_id": "BTCUSDT.BINANCE",
+      "quantity_increment": "0.25"
+    }
+  ],
+  "positions": [],
+  "proposal": {
+    "instrument_id": "BTCUSDT.BINANCE",
+    "position_id": "P-197",
+    "quantity": "1.25"
+  }
+}

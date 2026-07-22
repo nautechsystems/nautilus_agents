@@ -1,0 +1,282 @@
+{
+  "$defs": {
+    "ContentDigest": {
+      "description": "Stores a lowercase SHA-256 content digest.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifies public correlation or causation metadata.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "CorrelationRefs": {
+      "additionalProperties": false,
+      "description": "Carries public links into engine correlation without exposing private records.",
+      "properties": {
+        "engine_causation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The engine causation identity when one exists."
+        },
+        "engine_correlation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CorrelationId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The engine correlation identity when one exists."
+        }
+      },
+      "type": "object"
+    },
+    "DecisionError": {
+      "additionalProperties": false,
+      "description": "Carries a stable decision-path error code and retry hint.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode",
+          "description": "The stable machine-readable error code."
+        },
+        "message": {
+          "description": "A human-readable, unstable explanation.",
+          "type": "string"
+        },
+        "retryable": {
+          "description": "Whether retrying the same logical operation may succeed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "type": "object"
+    },
+    "DecisionStatus": {
+      "description": "Enumerates stable public decision and dispatch progress states.",
+      "oneOf": [
+        {
+          "const": "accepted",
+          "description": "NautilusTrader accepted and durably identified the request.",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "description": "NautilusTrader rejected the semantic proposal.",
+          "type": "string"
+        },
+        {
+          "const": "authorized",
+          "description": "NautilusTrader authorized the proposal for private lowering.",
+          "type": "string"
+        },
+        {
+          "const": "not_dispatched",
+          "description": "NautilusTrader did not dispatch a command.",
+          "type": "string"
+        },
+        {
+          "const": "dispatched",
+          "description": "NautilusTrader dispatched the private command.",
+          "type": "string"
+        },
+        {
+          "const": "dispatch_unknown",
+          "description": "NautilusTrader cannot yet establish the dispatch outcome.",
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "NautilusTrader completed the public decision lifecycle.",
+          "type": "string"
+        }
+      ]
+    },
+    "ErrorCode": {
+      "description": "Enumerates stable public request and decision error categories.",
+      "oneOf": [
+        {
+          "const": "malformed",
+          "description": "The request could not be decoded or validated.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported_version",
+          "description": "The protocol version is unsupported.",
+          "type": "string"
+        },
+        {
+          "const": "forbidden",
+          "description": "The authenticated principal cannot submit the request.",
+          "type": "string"
+        },
+        {
+          "const": "stale_observation",
+          "description": "The referenced observation is no longer usable.",
+          "type": "string"
+        },
+        {
+          "const": "indeterminate_state",
+          "description": "NautilusTrader could not establish a safe decision state.",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "description": "NautilusTrader rejected the semantic proposal.",
+          "type": "string"
+        },
+        {
+          "const": "idempotency_conflict",
+          "description": "A principal-scoped idempotency key was reused with different content.",
+          "type": "string"
+        },
+        {
+          "const": "commit_failed",
+          "description": "NautilusTrader could not durably commit the accepted decision.",
+          "type": "string"
+        },
+        {
+          "const": "dispatch_failed",
+          "description": "NautilusTrader could not establish a safe dispatch result.",
+          "type": "string"
+        }
+      ]
+    },
+    "IntentId": {
+      "description": "Identifies an intent accepted by NautilusTrader.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "ObservationId": {
+      "description": "Identifies an observation constructed by NautilusTrader.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "ObservationRef": {
+      "additionalProperties": false,
+      "description": "Links a request or trace to exact observation content.",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/ContentDigest",
+          "description": "The exact observation content digest."
+        },
+        "id": {
+          "$ref": "#/$defs/ObservationId",
+          "description": "The observation identity."
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ProtocolVersion": {
+      "additionalProperties": false,
+      "description": "Identifies an external protocol revision independently of crate SemVer.",
+      "properties": {
+        "major": {
+          "description": "The compatibility-breaking protocol component.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "description": "The backward-compatible protocol component.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "RequestId": {
+      "description": "Identifies a caller-created proposal request.",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "TimestampNs": {
+      "description": "Stores unsigned Unix nanoseconds and serializes them as a decimal JSON string.",
+      "pattern": "^(?:0|[1-9][0-9]*)$",
+      "type": "string"
+    }
+  },
+  "$id": "https://schemas.nautilustrader.io/agents/v1/decision-receipt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Reports the stable public outcome for an accepted request.",
+  "properties": {
+    "correlation": {
+      "$ref": "#/$defs/CorrelationRefs",
+      "description": "Public engine correlation references when available."
+    },
+    "created_at": {
+      "$ref": "#/$defs/TimestampNs",
+      "description": "The receipt creation time."
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "An error for terminal negative or uncertain states."
+    },
+    "intent_id": {
+      "$ref": "#/$defs/IntentId",
+      "description": "The intent identity minted by NautilusTrader after request acceptance."
+    },
+    "observation": {
+      "$ref": "#/$defs/ObservationRef",
+      "description": "The exact observation considered by NautilusTrader."
+    },
+    "request_id": {
+      "$ref": "#/$defs/RequestId",
+      "description": "The caller-created request identity."
+    },
+    "status": {
+      "$ref": "#/$defs/DecisionStatus",
+      "description": "The stable public decision status."
+    },
+    "updated_at": {
+      "$ref": "#/$defs/TimestampNs",
+      "description": "The most recent receipt update time."
+    },
+    "version": {
+      "$ref": "#/$defs/ProtocolVersion",
+      "description": "The external protocol version."
+    }
+  },
+  "required": [
+    "version",
+    "request_id",
+    "observation",
+    "intent_id",
+    "status",
+    "correlation",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "DecisionReceipt",
+  "type": "object"
+}

@@ -1,0 +1,23 @@
+{
+  "agent_trace_id": null,
+  "guardrail_result": "approved",
+  "idempotency_key": "fixture-guardrail-result",
+  "observation": {
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "id": "10000000-0000-4000-8000-000000000011"
+  },
+  "proposal": {
+    "intent": {
+      "reduce_position": {
+        "instrument_id": "BTCUSDT.BINANCE",
+        "position_id": "P-197",
+        "quantity": "1.25"
+      }
+    }
+  },
+  "request_id": "20000000-0000-4000-8000-000000000021",
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
+}

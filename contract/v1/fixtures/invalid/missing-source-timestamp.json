@@ -1,0 +1,31 @@
+{
+  "created_at": "1712400000000000101",
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "expires_at": "1712400030000000202",
+  "grant": {
+    "expires_at": "1712400060000000303",
+    "instruments": [],
+    "observations": [],
+    "proposals": []
+  },
+  "id": "10000000-0000-4000-8000-000000000011",
+  "omissions": [],
+  "payload": {
+    "live": {
+      "instruments": [],
+      "positions": []
+    }
+  },
+  "provenance": [
+    {
+      "field": "/payload/live/positions",
+      "source": "position_state",
+      "version": "position-revision-17"
+    }
+  ],
+  "retention": "reference_only",
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
+}

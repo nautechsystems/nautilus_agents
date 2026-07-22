@@ -42,6 +42,12 @@ format:  #-- Format Rust code (nightly rustfmt)
 pre-commit:  #-- Run all pre-commit hooks on all files
 	prek run --all-files
 
+.PHONY: pre-flight
+pre-flight:  #-- Run pre-commit hooks, Rust tests, and supply-chain checks
+	@$(MAKE) --no-print-directory pre-commit
+	@$(MAKE) --no-print-directory cargo-test
+	@$(MAKE) --no-print-directory security-audit
+
 .PHONY: check-code
 check-code:  #-- Run clippy linter
 	$(info $(M) Running code quality checks...)
@@ -58,11 +64,19 @@ clippy-fix:  #-- Run clippy with automatic fixes
 
 #== Testing
 
+.PHONY: contract-generate
+contract-generate:  #-- Generate public protocol schemas and fixtures
+	cargo run --locked -p agent-contract-schema -- generate
+
+.PHONY: contract-check
+contract-check:  #-- Check generated public protocol assets
+	cargo run --locked -p agent-contract-schema -- check
+
 .PHONY: cargo-test
 cargo-test: export RUST_BACKTRACE=1
 cargo-test:  #-- Run all Rust tests
 	$(info $(M) Running Rust tests...)
-	cargo test
+	cargo test --locked --all-targets --all-features
 
 .PHONY: cargo-check
 cargo-check:  #-- Check Rust code without building
@@ -80,13 +94,22 @@ update:  #-- Update Rust dependencies
 
 #== Security
 
+# Run an audit step quietly and display its captured output only on failure
+define audit_step
+	printf "$(CYAN)Running $(1)...$(RESET) "; \
+	if _out=$$($(2) 2>&1); then \
+		printf "$(GREEN)ok$(RESET)\n"; \
+	else \
+		rc=$$?; printf "$(RED)failed$(RESET)\n%s\n" "$$_out"; exit $$rc; \
+	fi
+endef
+
 .PHONY: security-audit
 security-audit: check-audit-installed check-deny-installed check-vet-installed  #-- Run full security audit
 	$(info $(M) Running security audit...)
-	@cargo audit --color never
-	@cargo deny --all-features check advisories licenses sources bans
-	@cargo vet --locked
-	@printf "$(GREEN)Security audit passed$(RESET)\n"
+	@$(call audit_step,cargo audit,cargo audit --color never)
+	@$(call audit_step,cargo deny,cargo deny --all-features check advisories licenses sources bans)
+	@$(call audit_step,cargo vet,cargo vet --locked)
 
 .PHONY: cargo-deny
 cargo-deny: check-deny-installed  #-- Run cargo-deny checks

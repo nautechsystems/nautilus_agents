@@ -1,0 +1,20 @@
+{
+  "instruments": [
+    {
+      "instrument_id": "ETHUSDT.BINANCE",
+      "quantity_increment": "0.25"
+    }
+  ],
+  "positions": [
+    {
+      "instrument_id": "ETHUSDT.BINANCE",
+      "position_id": "P-197",
+      "quantity": "2.75"
+    }
+  ],
+  "proposal": {
+    "instrument_id": "BTCUSDT.BINANCE",
+    "position_id": "P-197",
+    "quantity": "1.25"
+  }
+}

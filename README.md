@@ -1,239 +1,195 @@
 # Nautilus Agents
 
-![license](https://img.shields.io/github/license/nautechsystems/nautilus_agents?color=blue)
-[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/NautilusTrader)
+[![License](https://img.shields.io/badge/license-LGPL--3.0--or--later-blue.svg)](LICENSE)
+![Status](https://img.shields.io/badge/status-early%20alpha-orange)
 
-Open agent protocol for [NautilusTrader](https://nautilustrader.io).
-
-This crate defines the contract between an agent policy and the Nautilus
-trading engine. Agents observe state, express decisions through a
-structured protocol, and every cycle is recorded for replay and audit.
-
-- Automate backtest iteration: hypotheses, parameter sweeps, result comparison.
-- Monitor live systems: detect anomalies, reduce exposure, escalate.
-- Record every decision for reproducible analysis.
+Nautilus Agents is the public SDK for authoring and assuring agent policies that propose narrow,
+semantic actions to NautilusTrader. It gives policy authors scoped observations, strict protocol
+types, local evidence, and a transport-neutral client boundary without granting engine or venue
+authority to the agent process.
 
 > [!WARNING]
-> **Early alpha.** The API is not stable and may change between versions.
-> Research and risk management workflows are the current focus.
-> Execution-tier features (entry orders, limit strategies) are not yet
-> implemented.
+> **Early alpha:** `0.2.0` is under active development. APIs and protocol 1.0 may change. The crate
+> is not ready for production use.
 
-## Platform
+## Current status
 
-[NautilusTrader](https://nautilustrader.io) is an open-source,
-high-performance, production-grade algorithmic trading platform. It lets
-traders backtest automated strategies on historical data with an
-event-driven engine, then deploy those same strategies live with no code
-changes.
+The SDK currently implements:
 
-NautilusTrader's design, architecture, and implementation philosophy put
-correctness and safety first. The platform targets backtesting and live
-trading workloads where mistakes cost real money.
+- protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error,
+  and receipt types;
+- one semantic live proposal: `ReducePosition`;
+- runtime-neutral proposal policies with timeout and panic capture;
+- agent-side traces and retention-aware JSONL recording;
+- advisory-only local checks and side-by-side policy evaluation;
+- a transport-neutral client trait;
+- generated schemas, fixtures, field metadata, and embedded conformance assets; and
+- deterministic test values behind the `testkit` feature.
 
-## What this crate includes
+## Design intent
 
-`nautilus-agents` is the open protocol layer. It sits on top of the open
-NautilusTrader crates and reuses their real model types.
+The SDK is designed for agent processes that should be able to reason about a narrow view of live
+state and propose a semantic risk-reducing action. Policy code works against an exact, versioned
+`Observation`, produces no proposal or one `ReducePosition` proposal, and can retain agent-side
+evidence under an explicit recording policy.
 
-- `AgentContext`: owned, bounded snapshot of engine state built from
-  `QuoteTick`, `Bar`, `AccountState`, `PositionSnapshot`, `OrderSnapshot`,
-  and `PositionStatusReport`.
-- `AgentPolicy`: the trait a policy implements.
-- `PolicyDecision`: `Execute(PlannedIntent)`, `NoAction`, or `Failed(PolicyError)`.
-- `PlannedIntent`: stable `intent_id` correlation wrapper around an
-  `AgentIntent`.
-- `AgentIntent`: semantic actions with execution constraints.
-- `CapabilitySet`: explicit observation and action permissions.
-- Intent and action guardrail traits.
-- Lowering from `PlannedIntent` to `RuntimeAction`.
-- `DecisionPipeline`: the policy, capability, guardrail, and lowering loop.
-- `DecisionEnvelope`: the canonical record for one decision cycle, with
-  an optional `PlannedIntentOutcome` for the planned intent.
-- `DecisionRecorder`: line-delimited JSON recording for envelopes.
+The public boundary contains the observation, proposal, and assurance data needed to author and
+test those policies. Protocol-native DTOs keep the crate independent of NautilusTrader packages.
 
-## How the pieces fit together
+## Authority boundary
 
-The crate keeps agent reasoning separate from execution details:
+NautilusTrader owns observation construction and every production decision and execution step.
+This crate evaluates policies and carries proposals, local evidence, and public outcomes.
 
-```mermaid
-flowchart TD
-    A[Engine state] --> B[AgentContext]
-    B --> C[AgentPolicy::evaluate]
-    C --> D{PolicyDecision}
-    D -- NoAction --> E[DecisionEnvelope]
-    D -- Failed(PolicyError) --> E
-    D -- Execute(PlannedIntent) --> F[Capability check]
-    F -- Denied --> E
-    F -- Passed --> G[Intent guardrails]
-    G -- Rejected --> E
-    G -- Approved --> H{Lowering}
-    H -- Failed --> E
-    H -- Ok --> I[Action guardrails]
-    I -- Rejected --> E
-    I -- Approved --> E
-    E --> J[Execution or replay]
+An `AdvisoryReport` is local evidence only. NautilusTrader may reject a proposal even when every
+local check is clear. An `AgentTrace` records the agent-side evaluation, while a `DecisionReceipt`
+reports the public outcome. Neither grants production authority.
+
+## Protocol 1.0
+
+Protocol versioning is independent of crate SemVer. `ProtocolVersion { major, minor }` travels with
+public observations, requests, traces, and receipts. A major change is incompatible. A supported
+minor version may add backward-compatible detail.
+
+Protocol 1.0 supports only:
+
+```rust
+LiveIntent::ReducePosition(ReducePosition {
+    position_id,
+    instrument_id,
+    quantity,
+})
 ```
 
-## What this crate does not ship
+`ReducePosition` carries only a position, instrument, and quantity. NautilusTrader determines how
+to handle an accepted proposal.
 
-- An LLM runtime, agent harness, or prompt framework.
-- A chat UI or Telegram-style control surface.
-- The live MCP or axum server.
-- Venue credentials or hosted execution infrastructure.
-- Hosted replay storage, dashboards, or fleet orchestration.
-- RBAC, approvals, or team workflow services.
+## Authoring a policy
 
-You bring your own runtime. A separate server layer can sit on top of this
-protocol for live venue access and product features.
+Implement `ProposalPolicy` with explicit SDK imports:
 
-## Capability tiers
+```rust
+use nautilus_agents::{
+    authoring::policy::{ProposalDecision, ProposalFuture, ProposalPolicy},
+    protocol::observation::Observation,
+};
 
-The protocol defines three capability tiers, ordered by where agents
-deliver the most value first.
+struct ObserveOnly;
 
-**Research.** Backtest iteration, hypothesis testing, parameter
-optimization, result comparison. No venue risk, no capital at stake.
-The reasoning an agent does well and static rules handle poorly.
-
-**Risk and reliability.** Anomaly detection, exposure reduction, order
-cancellation, strategy pause, human escalation. Live but defensive:
-the agent monitors and protects.
-
-**Execution.** Agent-driven entry, limit orders, venue-specific
-parameters. The full trading surface, unlocked after research and risk
-management are proven.
-
-## Design principles
-
-**Deny-by-default capabilities.** An agent can only observe data and emit
-intents that its `CapabilitySet` explicitly grants. Everything else is
-denied. This follows the object-capability model: authority comes from
-possession of a capability token, not from ambient access.
-
-**Intent and action separation.** An `AgentIntent` expresses what the
-agent wants to do. A `RuntimeAction` is what the engine executes. The
-translation between them ("lowering") is explicit, auditable, and
-rejects combinations it cannot safely produce. The same separation
-compilers use between high-level IR and machine code.
-
-**Canonical decision record.** Every decision cycle produces a
-`DecisionEnvelope` containing the trigger, context, decision, and a
-`PlannedIntentOutcome` for the planned intent (capability check,
-guardrail results, lowering, lowered action). Policy errors are
-recorded inline as `PolicyDecision::Failed`. One record per cycle,
-no gaps: the envelope is the single source of truth for replay and
-audit.
-
-**Dual guardrails.** Guardrails run twice: before lowering (semantic
-checks on the intent) and after lowering (concrete checks on the
-action). Two different failure classes, both recorded. The same
-pre/post validation pattern used in middleware pipelines and compiler
-passes.
-
-**Deterministic replay.** Recorded envelopes can be re-evaluated through
-a different pipeline to compare outcomes. Change a guardrail threshold
-or a policy, replay last week's decisions, and see where the new
-configuration diverges. Built on the same principle as NautilusTrader's
-backtesting engine.
-
-## Current scope
-
-Research and risk management intents are lowerable today:
-
-- **Research**: `RunBacktest`, `AbortBacktest`, `AdjustParameters`,
-  `CompareResults` lower to `ResearchCommand` variants.
-  `SaveCandidate` and `RejectHypothesis` are workflow intents that
-  record decisions without producing runtime actions.
-- **Risk management**: `ReducePosition`, `ClosePosition`, `CancelOrder`,
-  `CancelAllOrders` lower to trading commands.
-- **Pipeline**: `DecisionPipeline` runs async policy evaluation,
-  capability checks, dual guardrails, lowering with explicit outcome
-  tracking, and envelope creation.
-- **Planning**: `PolicyDecision::Execute` carries a single
-  `PlannedIntent` with a stable `intent_id`; `NoAction` records a
-  no-op cycle; `Failed(PolicyError)` records a policy failure inline.
-  Multi-intent plans are not part of the current protocol.
-- **Replay**: `DecisionRecorder` writes JSONL. The replay engine reads it
-  back and compares outcomes across policy or guardrail changes.
-- **Guardrails**: `PositionLimitGuardrail` enforces per-order quantity
-  limits. The envelope separates lowering failures from guardrail
-  rejections for clear audit trails.
-
-## Examples
-
-See the [`examples/`](examples/) directory:
-
-- [`research_workflow.rs`](examples/research_workflow.rs): run a backtest
-  iteration cycle through the decision pipeline.
-- [`risk_monitoring.rs`](examples/risk_monitoring.rs): detect a position
-  anomaly and reduce exposure through guardrails.
-
-## Module map
-
-| Module       | Purpose                                            |
-|--------------|----------------------------------------------------|
-| `context`    | Owned policy input built from Nautilus snapshots.  |
-| `policy`     | `AgentPolicy`, `PolicyDecision`, `PolicyError`.    |
-| `intent`     | Semantic action vocabulary and constraints.        |
-| `capability` | Observation and action permissions.                |
-| `guardrail`  | Intent-level and action-level guardrail traits.    |
-| `guardrails` | Concrete guardrail implementations.                |
-| `lowering`   | Intent-to-action translation.                      |
-| `action`     | `RuntimeAction`, `TradeAction`, `ResearchCommand`. |
-| `pipeline`   | End-to-end decision orchestration.                 |
-| `envelope`   | Canonical decision record types.                   |
-| `recording`  | JSONL recording for decision envelopes.            |
-| `replay`     | Replay reader, runner, and outcome comparison.     |
-
-## Roadmap
-
-Near-term priorities, in order:
-
-1. **Research workflow depth.** Add fields to research intent variants for
-   backtest configuration, parameter sets, and result handles. Connect to
-   the NautilusTrader backtest engine.
-2. **Execution tier.** Entry orders, limit strategies, and venue-specific
-   execution. Unlocked after research and risk management are proven.
-
-Multi-intent plans are deliberately out of scope. A policy emits one
-`PlannedIntent` per cycle; a controller that needs multiple correlated
-actions should run multiple cycles. Revisiting multi-intent would
-require forward-simulating position and order state between intents
-so stateful guardrails and lowering see the effective snapshot, which
-is a larger design commitment than the current protocol is ready for.
-
-Execution-tier features are intentionally deferred. The protocol earns
-trust through research and defensive operations first.
-
-## Relationship to NautilusTrader
-
-This crate depends on the open NautilusTrader stack:
-
-```text
-nautilus-core / nautilus-model / nautilus-common
-                      ^
-                      |
-              nautilus-agents
+impl ProposalPolicy for ObserveOnly {
+    fn propose<'a>(&'a self, _observation: &'a Observation) -> ProposalFuture<'a> {
+        Box::pin(async { Ok(ProposalDecision::NoProposal) })
+    }
+}
 ```
 
-It does not duplicate engine models with protocol-native copies.
-`AgentContext` uses the real Nautilus snapshot and report types directly.
-`AgentIntent` is the seam between policy reasoning and execution.
+`ProposalRunner` applies a runtime-neutral timeout, captures returned errors and panics, and emits
+exactly one `AgentTrace`. It does not call a client or produce a receipt.
+
+See [the defensive policy example](examples/defensive_policy.rs) for a complete typed observation,
+policy evaluation, trace, and advisory report.
+
+## Local assurance
+
+### Advisory checks
+
+`AdvisoryValidator` checks protocol version, expiry, digest, required omissions, position and
+instrument identity, observed quantity, and quantity increment. Reports use `finding` and `clear`
+terms because the checks do not make a production decision.
+
+### Recording
+
+`TraceRecorder` writes traces and optional observations as separate JSONL record kinds. The default
+`ObservationCapture::ReferenceOnly` mode stores only `ObservationRef` identity and digest data.
+
+- `ReferenceOnly` is safe by default and stores no observation payload.
+- `Redacted` requires an `ObservationRedactor`; the returned observation must validate separately.
+- `Full` requires explicit selection and rejects `RetentionClass::Restricted` observations.
+
+Each record update replaces the JSONL target atomically, so a failed write does not leave a partial
+record.
+
+Use one recorder per path. Concurrent recorders are not coordinated and may overwrite each other's
+latest append.
+
+### Shadow evaluation
+
+`ShadowEvaluator` runs two `ProposalPolicy` values over the same recorded or synthetic
+`Observation`. It compares proposal decisions and local failure outcomes field by field. It does
+not simulate NautilusTrader or venue outcomes.
+
+See [the shadow policy example](examples/shadow_policy.rs).
+
+## Client boundary
+
+`AgentClient` separates policy authoring from transport:
+
+```rust
+pub trait AgentClient: Send + Sync {
+    fn submit<'a>(
+        &'a self,
+        request: &'a LiveProposalRequest,
+    ) -> ClientFuture<'a, ProposalResponse>;
+
+    fn receipt<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+    ) -> ClientFuture<'a, ProposalResponse>;
+}
+```
+
+`ClientError` covers transport, decoding, and unsupported-version failures. A request-level error
+or decision-path rejection is a successful `ProposalResponse`, not a client transport failure.
+
+## Modules
+
+| Module        | Purpose                                                                    |
+| ------------- | -------------------------------------------------------------------------- |
+| `protocol`    | Strict versioned DTOs, identities, values, digests, requests, and receipts |
+| `authoring`   | `ProposalPolicy`, local decisions, errors, configuration, and runner       |
+| `assurance`   | Traces, recording, advisory reports, and shadow policy comparison          |
+| `client`      | Transport-neutral request submission and receipt retrieval                 |
+| `conformance` | Embedded public contract assets behind the `conformance` feature           |
+| `testing`     | Deterministic builders and values behind the `testkit` feature             |
+
+The crate has no broad prelude. Import the public values each policy uses.
+
+## Contract assets
+
+Rust DTOs are the source for the versioned assets under [`contract/v1`](contract/v1):
+
+- Draft 2020-12 JSON Schemas;
+- canonical RFC 8785 valid fixtures;
+- reviewed invalid fixtures with expected public errors;
+- `fields.toml` ownership, stability, required, retention, and digest metadata; and
+- `manifest.json` byte lengths, SHA-256 hashes, root types, expectations, and aggregate digest.
+
+Regenerate and verify them with:
+
+```bash
+make contract-generate
+make contract-check
+```
+
+Enable `conformance` to embed the same bytes in consumer tests. Enable `testkit` for
+`ObservationBuilder` and deterministic observation, request, trace, receipt, redaction, and expiry
+constructors.
+
+## Compatibility
+
+| Surface                         | Current support                          |
+| ------------------------------- | ---------------------------------------- |
+| Crate version                   | `0.2.0` early alpha                      |
+| Minimum Rust version            | `1.97.1`                                 |
+| Protocol version                | `1.0`                                    |
+| Semantic live proposals         | `ReducePosition`                         |
+| NautilusTrader package coupling | None                                     |
+
+## Security
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 ## License
 
-Licensed under the [GNU Lesser General Public License v3.0](LICENSE).
-
----
-
-NautilusTrader is developed and maintained by Nautech Systems, a technology
-company specializing in the development of high-performance trading systems.
-For more information, visit <https://nautilustrader.io>.
-
-Use of this software is subject to the
-[Disclaimer](https://nautilustrader.io/legal/disclaimer/).
-
-<img src="https://github.com/nautechsystems/nautilus_trader/raw/develop/assets/nautilus-logo-white.png" alt="logo" width="300" height="auto"/>
-
-Copyright 2015-2026 Nautech Systems Pty Ltd. All rights reserved.
+This project is licensed under the GNU Lesser General Public License v3.0 or later. See
+[LICENSE](LICENSE).

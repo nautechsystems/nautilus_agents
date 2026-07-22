@@ -1,0 +1,25 @@
+{
+  "created_at": "100",
+  "digest": "sha256:67456c0d856174ca3e345c5a3737566569e1d8e6f10c2cc4e1385d8a8c1049e6",
+  "expires_at": "200",
+  "grant": {
+    "expires_at": "300",
+    "instruments": [],
+    "observations": [],
+    "proposals": []
+  },
+  "id": "10000000-0000-4000-8000-000000000011",
+  "omissions": [],
+  "payload": {
+    "live": {
+      "instruments": [],
+      "positions": []
+    }
+  },
+  "provenance": [],
+  "retention": "reference_only",
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
+}

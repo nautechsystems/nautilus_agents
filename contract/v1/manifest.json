@@ -1,0 +1,390 @@
+{
+  "protocol_version": "1.0",
+  "generator_version": "0.2.0",
+  "contract_digest": "sha256:30b57fb75b57d1972aca2df10969f72116fe4958bca24981b77dc7325fc21e69",
+  "assets": [
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/client-intent-id.json",
+      "byte_length": 580,
+      "sha256": "sha256:8a530aaf86a316dacb0296511927a999600e29b4384664a25422ede20574f6d4",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/invalid/digest-mismatch.json",
+      "byte_length": 552,
+      "sha256": "sha256:cebae839675feb5fb973804e346297ab942660cf13fc4f6260e48f2bcc59eea9",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/dispatch-claim.json",
+      "byte_length": 559,
+      "sha256": "sha256:6872b88a846eda9a29f5b9fda114561ae7312e4b4baf48e80811560faefa1f3f",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/invalid/expired-observation.json",
+      "byte_length": 504,
+      "sha256": "sha256:d32ef402b7fbce451b98d948364cde09551a8c526dea52b77a59cc260ac8b6a4",
+      "expectation": "invalid",
+      "expected_error": "stale_observation"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/invalid/expiry-before-creation.json",
+      "byte_length": 552,
+      "sha256": "sha256:1fc7f04ed10b5c9fb0c827d5b2bc7b859ee4148c8783a1e767290e89eca7db26",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/exponent-quantity.json",
+      "byte_length": 531,
+      "sha256": "sha256:29738f4e5475ca0fd9ecd5bd6cf7ef7b5ef8049bff9dbeecf8c08b7a7410231a",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/guardrail-result.json",
+      "byte_length": 562,
+      "sha256": "sha256:4613702aeaad1ed81f0f986b03c3531b720c26b1c876462942f0c75483300c54",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/idempotency-conflict.json",
+      "byte_length": 527,
+      "sha256": "sha256:b028a3313868533438a7c8361ae300479bbf4be845e85d70c370f7f928b5a728",
+      "expectation": "invalid",
+      "expected_error": "idempotency_conflict"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/idempotency-original.json",
+      "byte_length": 528,
+      "sha256": "sha256:462b8b1acfad38c545c0fcc1bf8c16b903532841b9ff59a6db6bb4b59167180d",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalCase",
+      "path": "fixtures/invalid/increment-misaligned-quantity.json",
+      "byte_length": 358,
+      "sha256": "sha256:9161ba7736ac6d124536032e69439e91ce27c8af51665951c1098e7824e18ae3",
+      "expectation": "invalid",
+      "expected_error": "rejected"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/lowered-command.json",
+      "byte_length": 582,
+      "sha256": "sha256:dd270e9fdeb7e0969bce00743a734c772539a5bda1ba1b4f5fc875981748d78a",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/invalid/missing-digest.json",
+      "byte_length": 465,
+      "sha256": "sha256:9f1c21dbe3c619b724ff0b344585d2493135ee8e5215950f460a4da39c5b8826",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalCase",
+      "path": "fixtures/invalid/missing-instrument-view.json",
+      "byte_length": 267,
+      "sha256": "sha256:cc5500395218131fe45d3c82af3eddb58b24094bd36cfb9e5686bb0fb1889459",
+      "expectation": "invalid",
+      "expected_error": "rejected"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalCase",
+      "path": "fixtures/invalid/missing-position-view.json",
+      "byte_length": 247,
+      "sha256": "sha256:2ed64fdedace525b7ca5fa17c4e3ff864b69aa71271e7e1e47630c385c5bc4a9",
+      "expectation": "invalid",
+      "expected_error": "rejected"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/invalid/missing-source-timestamp.json",
+      "byte_length": 683,
+      "sha256": "sha256:9e1ee8646d1309dd672404451506967ee2ec52ab465c4034882e5c67d834332e",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/negative-quantity.json",
+      "byte_length": 530,
+      "sha256": "sha256:1d6d3219d906114ece60461677bdb9026fbdc2b532664fa716d4da3636078da8",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/over-precision-quantity.json",
+      "byte_length": 541,
+      "sha256": "sha256:115b15b890b0ed42af735cf5621b4d3781a1d86e0f4a577719bccc12b9522ca4",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalCase",
+      "path": "fixtures/invalid/position-instrument-mismatch.json",
+      "byte_length": 359,
+      "sha256": "sha256:cc42f6175f1dc5e0323f0145fe1a2c13165a98e78808e08193ec9983532193ba",
+      "expectation": "invalid",
+      "expected_error": "rejected"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/private-authorization-field.json",
+      "byte_length": 574,
+      "sha256": "sha256:6131739ef0f6cd9f975b3f895691540be81552b64c94a3f1299515ddd68be198",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/unknown-enum-variant.json",
+      "byte_length": 526,
+      "sha256": "sha256:37fb1a547d588706f1b4b304d99a09d3669ba63a25e727f8f91a63b7acaf26fe",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/unknown-field.json",
+      "byte_length": 546,
+      "sha256": "sha256:777e8311357f7360d5b5d154785d2896f436f2d52732dc0ae308f90b45be61c3",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProtocolInfo",
+      "path": "fixtures/invalid/unsupported-feature.json",
+      "byte_length": 123,
+      "sha256": "sha256:f51f7493a5bc5cdba2fc6b5ebc052958e7a2d524e6f577f4bbc891d6849b00f6",
+      "expectation": "invalid",
+      "expected_error": "unsupported_version"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/unsupported-protocol-major.json",
+      "byte_length": 525,
+      "sha256": "sha256:2bd4403ce2dc41f3fbaf8072215eaddd7453fd68c019d3710e197434cc127d8b",
+      "expectation": "invalid",
+      "expected_error": "unsupported_version"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/invalid/zero-quantity.json",
+      "byte_length": 522,
+      "sha256": "sha256:1288694cf3419b8e19bae044132f94883635fcd25deae976c690e0e2d4bd0465",
+      "expectation": "invalid",
+      "expected_error": "malformed"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalResponse",
+      "path": "fixtures/valid/error-forbidden.json",
+      "byte_length": 151,
+      "sha256": "sha256:527a1b77d6fea05e6a5d19231b5dd1d6a497574f042a349e064bfe901cd670aa",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "ProposalResponse",
+      "path": "fixtures/valid/error-unsupported-version.json",
+      "byte_length": 120,
+      "sha256": "sha256:40683cc2f330f6f9594aea11e17139bd760352cb7bd1a55d82a2595fde99da70",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/valid/full-live-observation.json",
+      "byte_length": 963,
+      "sha256": "sha256:dbc9a8bfa03fe48c2634ee67ea76e6f63eae81513000338f8775c0375be57d87",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-accepted.json",
+      "byte_length": 522,
+      "sha256": "sha256:d083f5b2a10285aa697dba41b2e6212f99a3f7eefa81344f54297b68845d3097",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-authorized.json",
+      "byte_length": 524,
+      "sha256": "sha256:a14d07d30d359b1a7c7b66015675b31299710eac56668c14e6ea19c7ec067df7",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-completed.json",
+      "byte_length": 523,
+      "sha256": "sha256:8f4313dc9487c25cc17aa201b329a364c84407785a6b0f266f402d4896580f40",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-dispatch-unknown.json",
+      "byte_length": 615,
+      "sha256": "sha256:589c08b21c93c6a399089e6199aa9d003e486d353bb074fedee5382d92849ff7",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-dispatched.json",
+      "byte_length": 524,
+      "sha256": "sha256:4d0604f67786b368a6a8244d8a51a5df7b476cf3133fecb8ff7407b444bc0c98",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-not-dispatched.json",
+      "byte_length": 613,
+      "sha256": "sha256:ff26cf98a5a9f5440198cb33f83edff78dac84d9b1bc32bfc4a23a817f03afcc",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "DecisionReceipt",
+      "path": "fixtures/valid/receipt-rejected.json",
+      "byte_length": 619,
+      "sha256": "sha256:f0affecbb41d0506c046810e8c6929c2cd50a08f46f6ba99a5154804621cf830",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "Observation",
+      "path": "fixtures/valid/redacted-observation.json",
+      "byte_length": 897,
+      "sha256": "sha256:29539305ded2b06a860fe409635b6e10e6614650b6e664a71eb5cd31f02348aa",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "LiveProposalRequest",
+      "path": "fixtures/valid/reduce-position-request.json",
+      "byte_length": 444,
+      "sha256": "sha256:9bfeeaf70b3a3cd959ce9b0cd0fef70819330111a4b93b9af621ece46055c2f6",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "AgentTrace",
+      "path": "fixtures/valid/trace-no-proposal.json",
+      "byte_length": 386,
+      "sha256": "sha256:8a7a2118a694080a5773f3ab4eaaba62a180585c8c88b35f44303a3b01b464d4",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "AgentTrace",
+      "path": "fixtures/valid/trace-policy-failure.json",
+      "byte_length": 460,
+      "sha256": "sha256:4e7e7853024ab0001bc57ced0aa1bbb833187ef5c642eef2e52c9fdc0e841c78",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "AgentTrace",
+      "path": "fixtures/valid/trace-proposal.json",
+      "byte_length": 492,
+      "sha256": "sha256:6e21245154f5df1020cb47ec6636b899c5f5bdc4f01fd6acc7ec708de2406cd2",
+      "expectation": "valid"
+    },
+    {
+      "kind": "fixture",
+      "root_type": "AgentTrace",
+      "path": "fixtures/valid/trace-timeout.json",
+      "byte_length": 444,
+      "sha256": "sha256:02ac8e0ca82f5bf28856a4577e99f28330d80f02c475571a615d734972636775",
+      "expectation": "valid"
+    },
+    {
+      "kind": "schema",
+      "root_type": "AgentTrace",
+      "path": "schema/agent-trace.schema.json",
+      "byte_length": 8164,
+      "sha256": "sha256:a4d96a79a5587cfdd5d189b7373f2b0625337fdca6371771e25f05425f7a980b",
+      "expectation": "schema"
+    },
+    {
+      "kind": "schema",
+      "root_type": "DecisionReceipt",
+      "path": "schema/decision-receipt.schema.json",
+      "byte_length": 8619,
+      "sha256": "sha256:28dab9c264a1552da89c6e7462813fd28589e9a1df0e10f2e1a310d77966aff2",
+      "expectation": "schema"
+    },
+    {
+      "kind": "schema",
+      "root_type": "LiveProposalRequest",
+      "path": "schema/live-proposal-request.schema.json",
+      "byte_length": 5893,
+      "sha256": "sha256:02fe2e7ef136599cb2fe4ba34996ad8423bbd920c10d92926e7fcffb0d798220",
+      "expectation": "schema"
+    },
+    {
+      "kind": "schema",
+      "root_type": "Observation",
+      "path": "schema/observation.schema.json",
+      "byte_length": 12344,
+      "sha256": "sha256:3ce1546fb91a0382e41adc28c3f2b8aff574ee730ca62cd2b4d1b7eedd93098a",
+      "expectation": "schema"
+    },
+    {
+      "kind": "schema",
+      "root_type": "ProposalResponse",
+      "path": "schema/proposal-response.schema.json",
+      "byte_length": 10617,
+      "sha256": "sha256:003efdf88e61bc6cbf4b2504dd99797c29c4658707f22730a7317781bcd6d091",
+      "expectation": "schema"
+    }
+  ]
+}

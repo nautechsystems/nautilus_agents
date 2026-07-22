@@ -1,0 +1,10 @@
+{
+  "features": [
+    "live_reduce_position",
+    "research_jobs"
+  ],
+  "version": {
+    "major": 1,
+    "minor": 0
+  }
+}
