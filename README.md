@@ -9,21 +9,21 @@ types, local evidence, and a transport-neutral client boundary without granting 
 authority to the agent process.
 
 > [!WARNING]
-> **Early alpha:** `0.2.0` is under active development. APIs and protocol 1.0 may change. The crate
-> is not ready for production use.
+> **Early alpha:** the API and protocol 1.0 may change. The crate is not ready for production use.
 
-## Current status
+## Scope
 
-The SDK currently implements:
+The SDK provides:
 
-- protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error, and receipt types;
-- one semantic live proposal: `ReducePosition`;
-- runtime-neutral proposal policies with timeout and panic capture;
-- agent-side traces and retention-aware JSONL recording;
-- advisory-only local checks and side-by-side policy evaluation;
-- a transport-neutral client trait;
-- generated schemas, fixtures, field metadata, and embedded conformance assets; and
-- deterministic test values behind the `testkit` feature.
+- Protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error,
+  and receipt types.
+- One semantic live proposal: `ReducePosition`.
+- Runtime-neutral proposal policies with timeout and panic capture.
+- Agent-side traces and retention-aware JSONL recording.
+- Advisory-only local checks and side-by-side policy evaluation.
+- A transport-neutral client trait.
+- Generated schemas, fixtures, field metadata, and embedded conformance assets.
+- Deterministic test values behind the `testkit` feature.
 
 ## Design intent
 
@@ -86,7 +86,11 @@ impl ProposalPolicy for ObserveOnly {
 exactly one `AgentTrace`. It does not call a client or produce a receipt.
 
 See [the defensive policy example](examples/defensive_policy.rs) for a complete typed observation,
-policy evaluation, trace, and advisory report.
+policy evaluation, trace, and advisory report:
+
+```bash
+cargo run --example defensive_policy
+```
 
 ## Local assurance
 
@@ -101,13 +105,16 @@ terms because the checks do not make a production decision.
 `TraceRecorder` writes traces and optional observations as separate JSONL record kinds. The default
 `ObservationCapture::ReferenceOnly` mode stores only `ObservationRef` identity and digest data.
 
-- `ReferenceOnly` is safe by default and stores no observation payload.
-- `Redacted` requires an `ObservationRedactor`; the returned observation must validate separately.
-- `Full` requires explicit selection and rejects `RetentionClass::Restricted` observations.
+- `ReferenceOnly` stores no observation payload.
+- `Redacted` requires an `ObservationRedactor`, and the returned observation must pass protocol
+  validation.
+- `Full` records the complete observation.
 
-Each record update replaces the JSONL target atomically, so a failed write does not leave a partial record.
+`Redacted` and `Full` both reject `RetentionClass::Restricted` observation data.
 
-Use one recorder per path. Concurrent recorders are not coordinated and may overwrite each other's latest append.
+Each record update replaces the JSONL target atomically, so a failed write does not leave a partial
+record. Use one recorder per path; concurrent recorders are not coordinated and may overwrite each
+other's latest append.
 
 ### Shadow evaluation
 
@@ -115,7 +122,11 @@ Use one recorder per path. Concurrent recorders are not coordinated and may over
 `Observation`. It compares proposal decisions and local failure outcomes field by field. It does
 not simulate NautilusTrader or venue outcomes.
 
-See [the shadow policy example](examples/shadow_policy.rs).
+See [the shadow policy example](examples/shadow_policy.rs):
+
+```bash
+cargo run --example shadow_policy
+```
 
 ## Client boundary
 
@@ -155,10 +166,10 @@ The crate has no broad prelude. Import the public values each policy uses.
 
 Rust DTOs are the source for the versioned assets under [`contract/v1`](contract/v1):
 
-- Draft 2020-12 JSON Schemas;
-- canonical RFC 8785 valid fixtures;
-- reviewed invalid fixtures with expected public errors;
-- `fields.toml` ownership, stability, required, retention, and digest metadata; and
+- Draft 2020-12 JSON Schemas.
+- Canonical RFC 8785 valid fixtures.
+- Reviewed invalid fixtures with expected public errors.
+- `fields.toml` ownership, stability, required, retention, and digest metadata.
 - `manifest.json` byte lengths, SHA-256 hashes, root types, expectations, and aggregate digest.
 
 Regenerate and verify them with:

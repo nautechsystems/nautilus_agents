@@ -64,7 +64,7 @@ the security of our platform and will do our best to properly recognize and cred
 
 nautilus-agents employs multiple layers of security to protect against supply chain attacks and vulnerabilities:
 
-- **Dependency auditing**: Automated security scanning via cargo-audit and cargo-deny.
+- **Dependency auditing**: Automated security scanning via cargo-audit, cargo-deny, and cargo-vet.
 - **Pre-commit security**: Gitleaks credential screening, private key detection, and
   Unicode control character detection.
 - **License compliance**: Automated checks ensuring LGPL-3.0 compatibility.
