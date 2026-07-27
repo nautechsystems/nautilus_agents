@@ -16,8 +16,7 @@ authority to the agent process.
 
 The SDK currently implements:
 
-- protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error,
-  and receipt types;
+- protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error, and receipt types;
 - one semantic live proposal: `ReducePosition`;
 - runtime-neutral proposal policies with timeout and panic capture;
 - agent-side traces and retention-aware JSONL recording;
@@ -106,11 +105,9 @@ terms because the checks do not make a production decision.
 - `Redacted` requires an `ObservationRedactor`; the returned observation must validate separately.
 - `Full` requires explicit selection and rejects `RetentionClass::Restricted` observations.
 
-Each record update replaces the JSONL target atomically, so a failed write does not leave a partial
-record.
+Each record update replaces the JSONL target atomically, so a failed write does not leave a partial record.
 
-Use one recorder per path. Concurrent recorders are not coordinated and may overwrite each other's
-latest append.
+Use one recorder per path. Concurrent recorders are not coordinated and may overwrite each other's latest append.
 
 ### Shadow evaluation
 
@@ -171,19 +168,18 @@ make contract-generate
 make contract-check
 ```
 
-Enable `conformance` to embed the same bytes in consumer tests. Enable `testkit` for
-`ObservationBuilder` and deterministic observation, request, trace, receipt, redaction, and expiry
-constructors.
+Enable `conformance` to embed the same bytes in consumer tests. Enable `testkit` for `ObservationBuilder`
+and deterministic observation, request, trace, receipt, redaction, and expiry constructors.
 
 ## Compatibility
 
-| Surface                         | Current support                          |
-| ------------------------------- | ---------------------------------------- |
-| Crate version                   | `0.2.0` early alpha                      |
-| Minimum Rust version            | `1.97.1`                                 |
-| Protocol version                | `1.0`                                    |
-| Semantic live proposals         | `ReducePosition`                         |
-| NautilusTrader package coupling | None                                     |
+| Surface                         | Current support     |
+| ------------------------------- | ------------------- |
+| Crate version                   | `0.2.0` early alpha |
+| Minimum Rust version            | `1.97.1`            |
+| Protocol version                | `1.0`               |
+| Semantic live proposals         | `ReducePosition`    |
+| NautilusTrader package coupling | None                |
 
 ## Security
 
@@ -191,5 +187,4 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 ## License
 
-This project is licensed under the GNU Lesser General Public License v3.0 or later. See
-[LICENSE](LICENSE).
+This project is licensed under the GNU Lesser General Public License v3.0 or later. See [LICENSE](LICENSE).

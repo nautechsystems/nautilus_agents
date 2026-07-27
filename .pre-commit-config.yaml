@@ -224,7 +224,7 @@ repos:
 
   # Markdown formatting and linting
   - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.22.0
+    rev: v0.23.1
     hooks:
       - id: markdownlint-cli2
         name: markdownlint
@@ -234,3 +234,12 @@ repos:
           - .markdownlint.jsonc
           - --fix
         files: "\\.md$"
+
+  - repo: local
+    hooks:
+      - id: check-markdown-tables
+        name: normalize markdown table padding
+        description: Pads GFM table columns to their widest cell, which MD060 does not check
+        entry: python3 -B scripts/check-markdown-tables.py
+        language: system
+        types: [markdown]

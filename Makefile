@@ -62,6 +62,21 @@ clippy:  #-- Run clippy linter (check only)
 clippy-fix:  #-- Run clippy with automatic fixes
 	cargo clippy --fix --all-targets --allow-dirty --allow-staged -- -D warnings
 
+# markdownlint-cli2 version comes from the pre-commit hook rev so both agree.
+MARKDOWNLINT_VERSION := $(shell awk '\
+	/markdownlint-cli2/ { found=1 } \
+	found && /^[[:space:]]*rev:[[:space:]]*/ { sub(/^v/, "", $$2); print $$2; exit } \
+' .pre-commit-config.yaml)
+MARKDOWNLINT ?= npx --yes markdownlint-cli2@$(MARKDOWNLINT_VERSION)
+MARKDOWN_FILES = $(shell git ls-files '*.md')
+
+.PHONY: check-markdown
+check-markdown:  #-- Lint Markdown with markdownlint-cli2 and check table delimiter padding
+	$(info $(M) Checking Markdown...)
+	@$(MARKDOWNLINT) --config .markdownlint.jsonc $(MARKDOWN_FILES)
+	@python3 -B scripts/check-markdown-tables.py $(MARKDOWN_FILES)
+	@printf "$(GREEN)Markdown check passed$(RESET)\n"
+
 #== Testing
 
 .PHONY: contract-generate
