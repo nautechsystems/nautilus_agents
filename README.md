@@ -1,4 +1,4 @@
-# Nautilus Agents
+# Nautilus Agents SDK
 
 [![License](https://img.shields.io/badge/license-LGPL--3.0--or--later-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-early%20alpha-orange)
@@ -15,8 +15,7 @@ authority to the agent process.
 
 The SDK provides:
 
-- Protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error,
-  and receipt types.
+- Protocol-native identity, quantity, timestamp, digest, capability, observation, proposal, error, and receipt types.
 - One semantic live proposal: `ReducePosition`.
 - Runtime-neutral proposal policies with timeout and panic capture.
 - Agent-side traces and retention-aware JSONL recording.
@@ -106,15 +105,14 @@ terms because the checks do not make a production decision.
 `ObservationCapture::ReferenceOnly` mode stores only `ObservationRef` identity and digest data.
 
 - `ReferenceOnly` stores no observation payload.
-- `Redacted` requires an `ObservationRedactor`, and the returned observation must pass protocol
-  validation.
+- `Redacted` requires an `ObservationRedactor`, and the returned observation must pass protocol validation.
 - `Full` records the complete observation.
 
 `Redacted` and `Full` both reject `RetentionClass::Restricted` observation data.
 
-Each record update replaces the JSONL target atomically, so a failed write does not leave a partial
-record. Use one recorder per path; concurrent recorders are not coordinated and may overwrite each
-other's latest append.
+Each record update replaces the JSONL target atomically, so a failed write does not leave a
+partial record. Use one recorder per path; concurrent recorders are not coordinated and may
+overwrite each other's latest append.
 
 ### Shadow evaluation
 
@@ -151,14 +149,14 @@ or decision-path rejection is a successful `ProposalResponse`, not a client tran
 
 ## Modules
 
-| Module        | Purpose                                                                    |
-| ------------- | -------------------------------------------------------------------------- |
-| `protocol`    | Strict versioned DTOs, identities, values, digests, requests, and receipts |
-| `authoring`   | `ProposalPolicy`, local decisions, errors, configuration, and runner       |
-| `assurance`   | Traces, recording, advisory reports, and shadow policy comparison          |
-| `client`      | Transport-neutral request submission and receipt retrieval                 |
-| `conformance` | Embedded public contract assets behind the `conformance` feature           |
-| `testing`     | Deterministic builders and values behind the `testkit` feature             |
+| Module        | Purpose                                                                     |
+| ------------- | --------------------------------------------------------------------------- |
+| `protocol`    | Strict versioned DTOs, identities, values, digests, requests, and receipts. |
+| `authoring`   | `ProposalPolicy`, local decisions, errors, configuration, and runner.       |
+| `assurance`   | Traces, recording, advisory reports, and shadow policy comparison.          |
+| `client`      | Transport-neutral request submission and receipt retrieval.                 |
+| `conformance` | Embedded public contract assets behind the `conformance` feature.           |
+| `testing`     | Deterministic builders and values behind the `testkit` feature.             |
 
 The crate has no broad prelude. Import the public values each policy uses.
 
