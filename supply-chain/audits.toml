@@ -13,6 +13,12 @@ criteria = "safe-to-run"
 delta = "2.13.1 -> 2.13.2"
 notes = "Moves const declarations outside the nested const block to avoid a rustc ICE; manual-impl example ordering fix. No unsafe changes."
 
+[[audits.cfg-if]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "1.0.4 -> 1.0.5"
+notes = "Deprecation notice pointing to cfg_select! in README and crate docs, plus CI action pins. No code changes."
+
 [[audits.cpufeatures]]
 who = "Nautech Systems <info@nautechsystems.io>"
 criteria = "safe-to-deploy"
@@ -97,6 +103,36 @@ criteria = "safe-to-run"
 delta = "0.4.16 -> 0.4.18"
 notes = "Configurable Cache pool capacity; std default uses available_parallelism. Existing pool mutex/stack logic unchanged in kind. No new unsafe."
 
+[[audits.rstest]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-run"
+delta = "0.26.1 -> 0.27.0"
+notes = "Async timeout uses futures_util::future::select on pinned futures instead of select!; futures-util default features disabled; MSRV 1.85. Other edits are docs and dev-dependency pins. No unsafe changes."
+
+[[audits.rstest_macros]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-run"
+delta = "0.26.1 -> 0.27.0"
+notes = "Matrix values accept doc comments as sanitized test-name descriptions; #[trace] prints the binding ident so mut arguments compile; generated paths use ::core. No unsafe, filesystem, network, or build-script changes."
+
+[[audits.schemars]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = "Requires schemars_derive =1.2.2; allow_null match guard refactor with the same behavior. Other edits are dev-dependency bumps. No unsafe changes."
+
+[[audits.schemars_derive]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "1.2.1 -> 1.2.2"
+notes = "Moves to syn 3 and serde_derive_internals 0.30: syn API renames, a placeholder private-module ident for from_ast, and borrowed container names. Generated schemas unchanged in this workspace. No unsafe changes."
+
+[[audits.serde_derive_internals]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "0.29.1 -> 0.30.0"
+notes = "Moves to syn 3 and edition 2021. Names carry spans through a new MultiName/Name type, callers supply the private module ident, and has_flatten/serde_path accessors are removed. No unsafe, filesystem, network, or build-script changes."
+
 [[audits.syn]]
 who = "Nautech Systems <info@nautechsystems.io>"
 criteria = "safe-to-deploy"
@@ -109,11 +145,23 @@ criteria = "safe-to-deploy"
 delta = "3.0.4 -> 3.0.5"
 notes = "TokenStream parse errors now carry a span. Remaining edits are rustc_ast test-harness binder structs. No unsafe changes."
 
+[[audits.syn]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "3.0.5 -> 3.0.6"
+notes = "Expression parsing no longer treats a None-delimited group holding only a lifetime as an expression group, fixing interpolated loop labels. Remaining edits are rustc_ast test-harness updates. No unsafe changes."
+
 [[audits.thiserror]]
 who = "Nautech Systems <info@nautechsystems.io>"
 criteria = "safe-to-deploy"
 delta = "2.0.19 -> 2.0.20"
 notes = "Docs URL bump only. No unsafe code."
+
+[[audits.thiserror]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "Requires thiserror-impl =2.0.21 and MSRV 1.77; docs URL bump. Other edits are tests and UI snapshots. No unsafe code."
 
 [[audits.thiserror-impl]]
 who = "Nautech Systems <info@nautechsystems.io>"
@@ -121,11 +169,29 @@ criteria = "safe-to-deploy"
 delta = "2.0.19 -> 2.0.20"
 notes = "Allows clippy::redundant_field_names in generated From impls. Unsafe count unchanged."
 
+[[audits.thiserror-impl]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "2.0.20 -> 2.0.21"
+notes = "Display format-argument parsing tracks turbofish depth so a closing > after :: is not an expression boundary. No unsafe changes."
+
+[[audits.toml_edit]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-run"
+delta = "0.25.13+spec-1.1.0 -> 0.25.15+spec-1.1.0"
+notes = "Encoder visits borrowed key paths instead of cloning keys and writes with write_str; table finish inserts keys directly. Requires toml_parser 1.1.3. No unsafe, network, or build-script changes."
+
 [[audits.toml_parser]]
 who = "Nautech Systems <info@nautechsystems.io>"
 criteria = "safe-to-run"
 delta = "1.1.2+spec-1.1.0 -> 1.1.3+spec-1.1.0"
 notes = "Lexer into_vec capacity uses div_ceil(4) instead of min(len, usize::MAX/size). No unsafe change."
+
+[[audits.unicode-ident]]
+who = "Nautech Systems <info@nautechsystems.io>"
+criteria = "safe-to-deploy"
+delta = "1.0.24 -> 1.0.26"
+notes = "Unicode 18.0.0 tables. Out-of-range fallback now indexes an all-zero trie chunk (ZERO_START/ZERO_CONTINUE) instead of a static zero; get_unchecked offsets remain below LEAF length (max 7967 of 7968). Remaining edits are docs, benchmarks, and CI."
 
 [[audits.uuid]]
 who = "Nautech Systems <info@nautechsystems.io>"

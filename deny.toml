@@ -50,10 +50,7 @@ external-default-features = "allow"
 allow = []
 deny = []
 
-skip = [
-  # Procedural macro dependencies currently span syn 2 and 3
-  { crate = "syn" },
-]
+skip = []
 
 skip-tree = []
 
