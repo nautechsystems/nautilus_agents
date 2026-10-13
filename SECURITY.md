@@ -3,7 +3,8 @@
 Report security vulnerabilities privately through the methods below.
 
 See the [NautilusTrader security policies](https://nautilustrader.io/security/) for the complete
-organization-wide policy set. The
+organization-wide policy set.
+
 [Responsible Disclosure Policy](https://nautilustrader.io/security/responsible-disclosure/)
 provides the safe-harbor and privacy terms for reports covered here.
 
@@ -18,25 +19,29 @@ Third-party services, exchanges, and data providers are excluded.
 
 ## Reporting a vulnerability
 
-**Preferred method:** [GitHub Security Advisories](https://github.com/nautechsystems/nautilus_agents/security/advisories/new)
+**Preferred method**: [GitHub Security Advisories](https://github.com/nautechsystems/nautilus_agents/security/advisories/new)
 
 GitHub Security Advisories support private disclosure and coordination before public release.
 
-**Alternative:** Email <security@nautechsystems.io>
+**Alternative**: email <security@nautechsystems.io>
 
 For a sensitive email report, you may request our PGP key for encrypted communication.
 
-Include the vulnerability description, reproduction steps, affected versions, and a suggested
-remediation when available.
+Include:
+
+- The vulnerability description.
+- Reproduction steps.
+- Affected versions.
+- A suggested remediation, when available.
 
 ## Response timeline
 
 We commit to:
 
-- **Initial response**: Within 48 hours of report submission.
-- **Status update**: Within 7 days with initial assessment.
-- **Fix timeline**: Critical vulnerabilities patched within 30 days; other issues within 90 days.
-- **Coordinated disclosure**: We'll work with you to agree on a public disclosure date.
+- **Initial response**: respond within 48 hours of report submission.
+- **Status update**: provide an initial assessment within 7 days.
+- **Fix timeline**: patch critical vulnerabilities within 30 days and other issues within 90 days.
+- **Coordinated disclosure**: work with you to agree on a public disclosure date.
 
 ## Responsible disclosure
 
@@ -57,8 +62,8 @@ available in a later release or in the repository.
 
 ## Bug bounty program
 
-We do not offer a formal bug bounty program. We appreciate efforts to improve the security of our
-platform and do our best to recognize and credit each contribution.
+We do not offer a formal bug bounty program. We appreciate efforts to improve platform security
+and do our best to recognize and credit each contribution.
 
 ## Security infrastructure
 

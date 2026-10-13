@@ -3,13 +3,13 @@
 [![License](https://img.shields.io/badge/license-LGPL--3.0--only-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-early%20alpha-orange)
 
-Nautilus Agents is the public SDK for authoring and assuring agent policies that propose narrow,
-semantic actions to NautilusTrader. It gives policy authors scoped observations, strict protocol
-types, local evidence, and a transport-neutral client boundary without granting engine or venue
-authority to the agent process.
+Nautilus Agents is the public SDK for authoring and assuring policies that propose narrow, semantic
+actions to NautilusTrader. Policy authors get scoped observations, strict protocol types, local
+evidence, and a transport-neutral client boundary. The agent process receives no engine or venue
+authority.
 
 > [!WARNING]
-> **Early alpha:** the API and protocol 1.0 may change. The crate is not ready for production use.
+> **Early alpha**: the API and protocol 1.0 may change. The crate is not ready for production use.
 
 ## Scope
 
@@ -27,10 +27,9 @@ The SDK provides:
 
 ## Design intent
 
-The SDK targets agent processes that reason about a narrow view of live state and propose a
-semantic, risk-reducing action. Policy code works against an exact, versioned `Observation`,
-produces either no proposal or one `ReducePosition` proposal, and can retain agent-side evidence
-under an explicit capture mode.
+Agent processes use the SDK to reason about a narrow view of live state and propose a semantic,
+risk-reducing action. A policy uses an exact, versioned `Observation` and produces either no proposal
+or one `ReducePosition` proposal. It can retain agent-side evidence under an explicit capture mode.
 
 The public boundary contains the observation, proposal, and assurance data needed to author and
 test those policies. Protocol-native DTOs keep the crate independent of NautilusTrader packages.
@@ -40,16 +39,23 @@ test those policies. Protocol-native DTOs keep the crate independent of Nautilus
 NautilusTrader owns observation construction and every production decision and execution step.
 This crate evaluates policies and carries proposals, local evidence, and public outcomes.
 
-An `AdvisoryReport` is local evidence only. NautilusTrader revalidates every input and may reject a
-proposal even when every local check is clear. An `AgentTrace` records the agent-side evaluation,
-and a `DecisionReceipt` reports the public outcome. Neither grants production authority.
+These public evidence types do not grant production authority:
+
+- An `AdvisoryReport` is local evidence only. NautilusTrader revalidates every input and may reject a
+  proposal even when every local check is clear.
+- An `AgentTrace` records the agent-side evaluation.
+- A `DecisionReceipt` reports the public outcome.
 
 ## Protocol 1.0
 
 Protocol versioning is independent of crate SemVer. `ProtocolVersion { major, minor }` travels with
-public observations, requests, traces, and receipts. A major change is incompatible, and a minor
-change may add backward-compatible detail. Validation accepts a version with the crate's major and
-an equal or lower minor, so a crate implementing protocol 1.0 rejects both `1.1` and `2.0`.
+public observations, requests, traces, and receipts.
+
+- A major change is incompatible.
+- A minor change may add backward-compatible detail.
+
+**Validation**: the version must have the crate's major and an equal or lower minor. A crate
+implementing protocol 1.0 therefore rejects both `1.1` and `2.0`.
 
 Protocol 1.0 supports only:
 
@@ -96,18 +102,20 @@ impl ProposalPolicy for ObserveOnly {
 }
 ```
 
-`ProposalRunner::new` takes the policy and a `RunnerConfig`, which sets the `PolicyMetadata`
-recorded in every trace and the evaluation timeout. `ProposalRunner::run` evaluates the policy
-against one observation:
+`ProposalRunner::new` takes the policy and a `RunnerConfig`. The config sets the evaluation timeout
+and the `PolicyMetadata` recorded in every trace. `ProposalRunner::run` evaluates the policy against
+one observation:
 
-- Each completed run returns exactly one `AgentTrace`. The runner does not call a client or produce
-  a receipt.
-- The runner races the policy future against a runtime-neutral timer. The timeout takes effect only
-  when the policy future yields control, so it cannot preempt blocking work inside a future poll.
-- A returned error, a timeout, or an unwinding panic raised while creating or polling the policy
-  future becomes a `TraceOutcome::Failed` trace with `AgentFailureKind::PolicyError`, `Timeout`, or
-  `Panic`, respectively.
-- A panic while dropping the future may escape, and an aborting panic terminates the process.
+- **Output**: each completed run returns exactly one `AgentTrace`. The runner does not call a client
+  or produce a receipt.
+- **Timeout**: the runner races the policy future against a runtime-neutral timer. The timeout takes
+  effect only when the policy future yields control, so it cannot preempt blocking work inside a
+  future poll.
+- **Failure trace**: a returned error, a timeout, or an unwinding panic raised while creating or
+  polling the policy future becomes a `TraceOutcome::Failed` trace with `AgentFailureKind::PolicyError`,
+  `Timeout`, or `Panic`, respectively.
+- **Panic limits**: a panic while dropping the future may escape, and an aborting panic terminates
+  the process.
 
 See [the defensive policy example](examples/defensive_policy.rs) for a complete typed observation,
 policy evaluation, trace, and advisory report:
@@ -121,9 +129,14 @@ cargo run --example defensive_policy
 ### Advisory checks
 
 `AdvisoryValidator::evaluate` checks one proposal against one observation at a caller-supplied
-evaluation time. It checks protocol version, expiry, digest, required omissions, position and
-instrument identity, observed quantity, and quantity increment. Reports use `finding` and `clear`
-terms because the checks do not make a production decision.
+evaluation time. It checks:
+
+- Protocol version, expiry, and digest.
+- Required omissions.
+- Position and instrument identity.
+- Observed quantity and quantity increment.
+
+Reports use `finding` and `clear` terms because the checks do not make a production decision.
 
 ### Recording
 
@@ -142,9 +155,10 @@ redacted observation must pass protocol validation.
 
 > [!IMPORTANT]
 > The recorder enforces only `RetentionClass::Restricted`. Match the capture mode to the
-> observation's retention class yourself: use `ReferenceOnly` capture for
-> `RetentionClass::ReferenceOnly` data, and retain `RetentionClass::Derived` data only under your
-> own retention policy.
+> observation's retention class yourself:
+>
+> - Use `ReferenceOnly` capture for `RetentionClass::ReferenceOnly` data.
+> - Retain `RetentionClass::Derived` data only under your own retention policy.
 
 Each append replaces the JSONL target atomically, so a failed write does not leave a partial
 record. Use one recorder per path; concurrent recorders are not coordinated and may overwrite each
@@ -153,9 +167,10 @@ other's latest append.
 ### Shadow evaluation
 
 `ShadowEvaluator` runs a baseline and a candidate `ProposalPolicy`, each with its own
-`RunnerConfig`, over the same recorded or synthetic `Observation`. It compares proposal decisions
-and local failure outcomes field by field, and `ShadowResult` lists each differing field path. It
-does not simulate NautilusTrader or venue outcomes.
+`RunnerConfig`, over the same recorded or synthetic `Observation`.
+
+It compares proposal decisions and local failure outcomes field by field. `ShadowResult` lists each
+differing field path. Shadow evaluation does not simulate NautilusTrader or venue outcomes.
 
 See [the shadow policy example](examples/shadow_policy.rs):
 
@@ -182,8 +197,11 @@ pub trait AgentClient: Send + Sync {
 }
 ```
 
-A successful call returns a `ProposalResponse`: a `DecisionReceipt` once NautilusTrader accepts the
-request into the decision path, or a `ProtocolError` when it rejects the request before acceptance.
+A successful call returns a `ProposalResponse` containing:
+
+- A `DecisionReceipt` once NautilusTrader accepts the request into the decision path.
+- A `ProtocolError` when NautilusTrader rejects the request before acceptance.
+
 A request-level error or a decision-path rejection therefore arrives as a response, not a
 `ClientError`. `ClientError` covers transport, decoding, and unsupported-version failures.
 
@@ -245,11 +263,12 @@ truth for shared engineering standards, tool pins, managed pre-commit definition
 scripts. [`.nautilus-engineering.lock`](.nautilus-engineering.lock) records the adopted revision,
 selected profiles, target paths, and file hashes.
 
-Do not edit a managed file or its lock hash directly. A root `tools.toml`, if needed, is reserved
-for tools unique to this repository; shared tool pins remain in
-`.nautilus-engineering/tools.toml`. Local policy stays in `Cargo.toml`, `security-audit.toml`,
-`deny.toml`, the `supply-chain` audit store, the `Makefile`, and pre-commit entries outside the
-managed markers.
+Do not edit a managed file or its lock hash directly.
+
+- **Tool pins**: a root `tools.toml`, if needed, is reserved for tools unique to this repository.
+  Shared tool pins remain in `.nautilus-engineering/tools.toml`.
+- **Local policy**: keep it in `Cargo.toml`, `security-audit.toml`, `deny.toml`, the `supply-chain`
+  audit store, the `Makefile`, and pre-commit entries outside the managed markers.
 
 To adopt a reviewed upstream revision, run the update from that exact `nautilus_engineering`
 checkout, then render and verify the consumer files:
